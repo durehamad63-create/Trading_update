@@ -15,6 +15,5 @@ utils/fallback_data_provider.py
 utils/circuit_breaker.py
 config/api_config.py
 RATE_LIMITING_IMPROVEMENTS.md
-utils/startup_api_client.py
 utils/enhanced_rate_limiter.py
 config/rate_limits.py
