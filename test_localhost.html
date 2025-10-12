@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Trading AI Test</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; }
+        button { padding: 8px 15px; margin: 5px; cursor: pointer; }
+        .result { background: #f5f5f5; padding: 10px; margin: 10px 0; }
+        .ws-status { padding: 5px; margin: 5px 0; }
+        .connected { background: #d4edda; }
+        .disconnected { background: #f8d7da; }
+        .chart-container { width: 100%; height: 400px; margin: 10px 0; }
+        canvas { max-height: 400px; }
+        .timeframe-buttons { margin: 10px 0; }
+        .timeframe-buttons button { background: #f8f9fa; border: 1px solid #ddd; }
+        .timeframe-buttons button.active { background: #007bff; color: white; }
+        .api-section { display: flex; gap: 20px; flex-wrap: wrap; }
+        .api-card { flex: 1; min-width: 300px; border: 1px solid #ccc; padding: 10px; }
+    </style>
+</head>
+<body>
+    <h1>Trading AI Platform Test</h1>
+
+    <!-- Health Check -->
+    <div class="section">
+        <h3>Health Check</h3>
+        <button onclick="testHealth()">Test Health</button>
+        <div id="health-result" class="result"></div>
+    </div>
+
+    <!-- API Endpoints Test -->
+    <div class="section">
+        <h3>API Endpoints</h3>
+        <div class="api-section">
+            <div class="api-card">
+                <h4>Market Summary</h4>
+                <button onclick="testMarket('crypto')">Crypto</button>
+                <button onclick="testMarket('stocks')">Stocks</button>
+                <button onclick="testMarket('macro')">Macro</button>
+                <div id="market-result" class="result"></div>
+            </div>
+            
+            <div class="api-card">
+                <h4>Asset Forecast</h4>
+                <input type="text" id="symbol" placeholder="Symbol" value="BTC">
+                <select id="forecast-timeframe">
+                    <option value="1h">1 Hour</option>
+                    <option value="4h">4 Hours</option>
+                    <option value="1D" selected>1 Day</option>
+                    <option value="7D">7 Days</option>
+                    <option value="1W">1 Week</option>
+                    <option value="1M">1 Month</option>
+                </select>
+                <button onclick="testForecast()">Get Forecast</button>
+                <div id="forecast-result" class="result"></div>
+            </div>
+            
+            <div class="api-card">
+                <h4>Asset Trends</h4>
+                <input type="text" id="trends-symbol" placeholder="Symbol" value="BTC">
+                <select id="trends-timeframe">
+                    <option value="1D">1 Day</option>
+                    <option value="7D" selected>7 Days</option>
+                    <option value="1M">1 Month</option>
+                </select>
+                <button onclick="testTrends()">Get Trends</button>
+                <div id="trends-result" class="result"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Price Chart -->
+    <div class="section">
+        <h3>Interactive Price Chart</h3>
+        <div>
+            <input type="text" id="chart-symbol" placeholder="Symbol" value="BTC">
+            <button onclick="loadChart()">Load Chart</button>
+            <button onclick="connectLiveChart()">Live Updates</button>
+            <button onclick="disconnectChart()">Stop Live</button>
+        </div>
+        
+        <div class="timeframe-buttons">
+            <button onclick="switchTimeframe('1h')" data-timeframe="1h">1H</button>
+            <button onclick="switchTimeframe('4h')" data-timeframe="4h">4H</button>
+            <button onclick="switchTimeframe('1D')" data-timeframe="1D" class="active">1D</button>
+            <button onclick="switchTimeframe('7D')" data-timeframe="7D">7D</button>
+            <button onclick="switchTimeframe('1W')" data-timeframe="1W">1W</button>
+            <button onclick="switchTimeframe('1M')" data-timeframe="1M">1M</button>
+        </div>
+        
+        <div id="chart-status" class="ws-status disconnected">Chart Ready</div>
+        <div class="chart-container">
+            <canvas id="priceChart"></canvas>
+        </div>
+    </div>
+
+    <!-- WebSocket Connections -->
+    <div class="section">
+        <h3>WebSocket Connections</h3>
+        <div class="api-section">
+            <div class="api-card">
+                <h4>Forecast Stream</h4>
+                <input type="text" id="ws-forecast-symbol" placeholder="Symbol" value="BTC">
+                <button onclick="connectForecastWS()">Connect</button>
+                <button onclick="disconnectForecastWS()">Disconnect</button>
+                <div id="forecast-ws-status" class="ws-status disconnected">Disconnected</div>
+                <div id="forecast-ws-result" class="result"></div>
+            </div>
+            
+            <div class="api-card">
+                <h4>Trends Stream</h4>
+                <input type="text" id="ws-trends-symbol" placeholder="Symbol" value="BTC">
+                <button onclick="connectTrendsWS()">Connect</button>
+                <button onclick="disconnectTrendsWS()">Disconnect</button>
+                <div id="trends-ws-status" class="ws-status disconnected">Disconnected</div>
+                <div id="trends-ws-result" class="result"></div>
+            </div>
+            
+            <div class="api-card">
+                <h4>Market Summary Stream</h4>
+                <select id="ws-market-class">
+                    <option value="crypto">Crypto</option>
+                    <option value="stocks">Stocks</option>
+                    <option value="macro">Macro</option>
+                </select>
+                <button onclick="connectMarketWS()">Connect</button>
+                <button onclick="disconnectMarketWS()">Disconnect</button>
+                <div id="market-ws-status" class="ws-status disconnected">Disconnected</div>
+                <div id="market-ws-result" class="result"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let chart = null;
+        let chartWS = null;
+        let forecastWS = null;
+        let trendsWS = null;
+        let marketWS = null;
+        let currentTimeframe = '1D';
+        let currentSymbol = 'BTC';
+
+        async function testHealth() {
+            try {
+                const response = await fetch('http://localhost:8000/api/health');
+                const data = await response.json();
+                document.getElementById('health-result').innerHTML = 
+                    `<strong>Status:</strong> ${response.status}<br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                document.getElementById('health-result').innerHTML = `<strong>Error:</strong> ${error.message}`;
+            }
+        }
+
+        async function testMarket(type) {
+            try {
+                const response = await fetch(`http://localhost:8000/api/market/summary?class=${type}&limit=5`);
+                const data = await response.json();
+                document.getElementById('market-result').innerHTML = 
+                    `<strong>${type.toUpperCase()}:</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                document.getElementById('market-result').innerHTML = `<strong>Error:</strong> ${error.message}`;
+            }
+        }
+
+        async function testForecast() {
+            const symbol = document.getElementById('symbol').value;
+            const timeframe = document.getElementById('forecast-timeframe').value;
+            try {
+                const response = await fetch(`http://localhost:8000/api/asset/${symbol}/forecast?timeframe=${timeframe}`);
+                const data = await response.json();
+                document.getElementById('forecast-result').innerHTML = 
+                    `<strong>${symbol} (${timeframe}):</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                document.getElementById('forecast-result').innerHTML = `<strong>Error:</strong> ${error.message}`;
+            }
+        }
+
+        async function testTrends() {
+            const symbol = document.getElementById('trends-symbol').value;
+            const timeframe = document.getElementById('trends-timeframe').value;
+            try {
+                const response = await fetch(`http://localhost:8000/api/asset/${symbol}/trends?timeframe=${timeframe}`);
+                const data = await response.json();
+                document.getElementById('trends-result').innerHTML = 
+                    `<strong>${symbol} Trends (${timeframe}):</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (error) {
+                document.getElementById('trends-result').innerHTML = `<strong>Error:</strong> ${error.message}`;
+            }
+        }
+
+        async function loadChart() {
+            const symbol = document.getElementById('chart-symbol').value;
+            currentSymbol = symbol;
+            
+            try {
+                const response = await fetch(`http://localhost:8000/api/asset/${symbol}/forecast?timeframe=${currentTimeframe}`);
+                const data = await response.json();
+                initChart(symbol, data);
+                document.getElementById('chart-status').textContent = `Chart loaded: ${symbol} (${currentTimeframe})`;
+            } catch (error) {
+                document.getElementById('chart-status').textContent = `Error: ${error.message}`;
+            }
+        }
+
+        function switchTimeframe(timeframe) {
+            currentTimeframe = timeframe;
+            
+            // Update active button
+            document.querySelectorAll('.timeframe-buttons button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            document.querySelector(`[data-timeframe="${timeframe}"]`).classList.add('active');
+            
+            // Reload chart with new timeframe
+            loadChart();
+        }
+
+        function initChart(symbol, data) {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            
+            if (chart) chart.destroy();
+
+            // Generate realistic historical data based on timeframe
+            const { labels, prices, predictions } = generateChartData(data, currentTimeframe);
+            
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: `${symbol} Price`,
+                        data: prices,
+                        borderColor: 'rgb(75, 192, 192)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                        tension: 0.1,
+                        pointRadius: 2
+                    }, {
+                        label: 'ML Prediction',
+                        data: predictions,
+                        borderColor: 'rgb(255, 99, 132)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                        borderDash: [5, 5],
+                        tension: 0.1,
+                        pointRadius: 3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: 'Price ($)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `${symbol} - ${currentTimeframe} Chart with ML Predictions`
+                        },
+                        legend: {
+                            display: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function generateChartData(data, timeframe) {
+            const currentPrice = data.current_price || 100;
+            const predictedPrice = data.predicted_price || currentPrice;
+            const labels = [];
+            const prices = [];
+            const predictions = [];
+            
+            // Determine data points and intervals based on timeframe
+            const timeframeConfig = {
+                '1h': { points: 60, interval: 1, unit: 'minute' },
+                '4h': { points: 48, interval: 5, unit: 'minute' },
+                '1D': { points: 24, interval: 1, unit: 'hour' },
+                '7D': { points: 7, interval: 1, unit: 'day' },
+                '1W': { points: 7, interval: 1, unit: 'day' },
+                '1M': { points: 30, interval: 1, unit: 'day' }
+            };
+            
+            const config = timeframeConfig[timeframe] || timeframeConfig['1D'];
+            const now = new Date();
+            
+            // Generate historical data
+            for (let i = config.points - 1; i >= 0; i--) {
+                const time = new Date(now);
+                
+                if (config.unit === 'minute') {
+                    time.setMinutes(time.getMinutes() - i * config.interval);
+                    labels.push(time.toLocaleTimeString());
+                } else if (config.unit === 'hour') {
+                    time.setHours(time.getHours() - i * config.interval);
+                    labels.push(time.toLocaleTimeString());
+                } else {
+                    time.setDate(time.getDate() - i * config.interval);
+                    labels.push(time.toLocaleDateString());
+                }
+                
+                // Generate realistic price variation
+                const variation = (Math.random() - 0.5) * 0.1 * (i / config.points);
+                const price = currentPrice * (1 + variation);
+                prices.push(price);
+                
+                // Add predictions for future points (last 20% of timeline)
+                if (i < config.points * 0.2) {
+                    const predVariation = (Math.random() - 0.5) * 0.05;
+                    predictions.push(predictedPrice * (1 + predVariation));
+                } else {
+                    predictions.push(null);
+                }
+            }
+            
+            return { labels, prices, predictions };
+        }
+
+        function connectLiveChart() {
+            const symbol = document.getElementById('chart-symbol').value;
+            if (chartWS) chartWS.close();
+            
+            chartWS = new WebSocket(`ws://localhost:8000/ws/chart/${symbol}`);
+            
+            chartWS.onopen = () => {
+                document.getElementById('chart-status').className = 'ws-status connected';
+                document.getElementById('chart-status').textContent = `Live: ${symbol} (${currentTimeframe})`;
+            };
+            
+            chartWS.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateChart(data);
+            };
+            
+            chartWS.onclose = () => {
+                document.getElementById('chart-status').className = 'ws-status disconnected';
+                document.getElementById('chart-status').textContent = 'Live updates stopped';
+            };
+        }
+
+        function disconnectChart() {
+            if (chartWS) {
+                chartWS.close();
+                chartWS = null;
+            }
+        }
+
+        function updateChart(data) {
+            if (!chart) return;
+            
+            const now = new Date();
+            const timeLabel = currentTimeframe.includes('D') || currentTimeframe.includes('W') || currentTimeframe.includes('M') 
+                ? now.toLocaleDateString() 
+                : now.toLocaleTimeString();
+            
+            // Add new data point
+            chart.data.labels.push(timeLabel);
+            chart.data.datasets[0].data.push(data.current_price);
+            chart.data.datasets[1].data.push(data.predicted_price);
+            
+            // Keep reasonable number of points
+            const maxPoints = currentTimeframe === '1h' ? 60 : currentTimeframe === '4h' ? 48 : 24;
+            if (chart.data.labels.length > maxPoints) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+                chart.data.datasets[1].data.shift();
+            }
+            
+            chart.update('none');
+        }
+
+        // WebSocket connections for different endpoints
+        function connectForecastWS() {
+            const symbol = document.getElementById('ws-forecast-symbol').value;
+            if (forecastWS) forecastWS.close();
+            
+            forecastWS = new WebSocket(`ws://localhost:8000/ws/asset/${symbol}/forecast`);
+            
+            forecastWS.onopen = () => {
+                document.getElementById('forecast-ws-status').className = 'ws-status connected';
+                document.getElementById('forecast-ws-status').textContent = `Connected: ${symbol}`;
+            };
+            
+            forecastWS.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                document.getElementById('forecast-ws-result').innerHTML = 
+                    `<strong>Live Forecast:</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            };
+            
+            forecastWS.onclose = () => {
+                document.getElementById('forecast-ws-status').className = 'ws-status disconnected';
+                document.getElementById('forecast-ws-status').textContent = 'Disconnected';
+            };
+        }
+
+        function disconnectForecastWS() {
+            if (forecastWS) {
+                forecastWS.close();
+                forecastWS = null;
+            }
+        }
+
+        function connectTrendsWS() {
+            const symbol = document.getElementById('ws-trends-symbol').value;
+            if (trendsWS) trendsWS.close();
+            
+            trendsWS = new WebSocket(`ws://localhost:8000/ws/asset/${symbol}/trends`);
+            
+            trendsWS.onopen = () => {
+                document.getElementById('trends-ws-status').className = 'ws-status connected';
+                document.getElementById('trends-ws-status').textContent = `Connected: ${symbol}`;
+            };
+            
+            trendsWS.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                document.getElementById('trends-ws-result').innerHTML = 
+                    `<strong>Live Trends:</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            };
+            
+            trendsWS.onclose = () => {
+                document.getElementById('trends-ws-status').className = 'ws-status disconnected';
+                document.getElementById('trends-ws-status').textContent = 'Disconnected';
+            };
+        }
+
+        function disconnectTrendsWS() {
+            if (trendsWS) {
+                trendsWS.close();
+                trendsWS = null;
+            }
+        }
+
+        function connectMarketWS() {
+            const marketClass = document.getElementById('ws-market-class').value;
+            if (marketWS) marketWS.close();
+            
+            marketWS = new WebSocket(`ws://localhost:8000/ws/market/summary?class=${marketClass}`);
+            
+            marketWS.onopen = () => {
+                document.getElementById('market-ws-status').className = 'ws-status connected';
+                document.getElementById('market-ws-status').textContent = `Connected: ${marketClass}`;
+            };
+            
+            marketWS.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                document.getElementById('market-ws-result').innerHTML = 
+                    `<strong>Market Update:</strong><br><pre>${JSON.stringify(data, null, 2)}</pre>`;
+            };
+            
+            marketWS.onclose = () => {
+                document.getElementById('market-ws-status').className = 'ws-status disconnected';
+                document.getElementById('market-ws-status').textContent = 'Disconnected';
+            };
+        }
+
+        function disconnectMarketWS() {
+            if (marketWS) {
+                marketWS.close();
+                marketWS = null;
+            }
+        }
+
+        // Auto-test health on load
+        window.onload = () => {
+            testHealth();
+            loadChart();
+        };
+    </script>
+</body>
+</html>
