@@ -8,6 +8,7 @@ import aiohttp
 import logging
 import numpy as np
 import random
+import os
 from datetime import datetime, timedelta
 from config.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS, MACRO_SYMBOLS
 from config.symbol_manager import symbol_manager

@@ -62,7 +62,9 @@ def setup_admin_routes(app: FastAPI, model, database):
             return {"success": False, "error": "Database not available"}
         
         async with db.pool.acquire() as conn:
-            await conn.execute("TRUNCATE TABLE actual_prices, forecasts, forecast_accuracy RESTART IDENTITY CASCADE")
+            await conn.execute("DELETE FROM actual_prices")
+            await conn.execute("DELETE FROM forecasts")
+            await conn.execute("DELETE FROM forecast_accuracy")
             
             try:
                 await conn.execute("ALTER SEQUENCE actual_prices_id_seq RESTART WITH 1")
