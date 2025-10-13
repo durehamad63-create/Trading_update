@@ -426,12 +426,8 @@ class MobileMLModel:
                 except:
                     pass
                 
-                # Fallback macro values
-                macro_defaults = {
-                    'GDP': 27000.0, 'CPI': 3.2, 'UNEMPLOYMENT': 3.7,
-                    'FED_RATE': 5.25, 'CONSUMER_CONFIDENCE': 102.0
-                }
-                return macro_defaults.get(symbol, 100.0)
+                # No fallback - fail if real data unavailable
+                raise Exception(f"No real price data available for macro indicator {symbol}")
             
             raise Exception(f"No cached price for {symbol}")
         except Exception as e:
