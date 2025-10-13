@@ -165,15 +165,15 @@ class RealTimeWebSocketService:
             
 
                             
-                            # Always store data for all timeframes (regardless of connections)
-                            asyncio.create_task(self._store_all_timeframes(symbol, current_price, volume, change_24h))
-                            
                             # Update candle data and broadcast only if connections exist
                             if symbol in self.active_connections and self.active_connections[symbol]:
                                 # Immediate price broadcast without waiting for ML
                                 asyncio.create_task(self._broadcast_price_update(symbol, current_price, change_24h, volume))
-                                # ML predictions in background (non-blocking)
+                                # ML predictions in background (stores data internally)
                                 asyncio.create_task(self._update_candles_and_forecast(symbol, current_price, volume, change_24h))
+                            else:
+                                # Store data for all timeframes even without active connections
+                                asyncio.create_task(self._store_all_timeframes(symbol, current_price, volume, change_24h))
                             
                         except Exception as e:
                             ErrorHandler.log_stream_error('binance_message', symbol, str(e))
@@ -220,15 +220,16 @@ class RealTimeWebSocketService:
                 # Generate forecast for every price update (no rate limiting)
                 await self._generate_timeframe_forecast(symbol, timeframe, current_time)
                 
-                # Store price data for every timeframe
-                timeframe_symbol = f"{symbol}_{timeframe}"
+                # Store price data for every timeframe using centralized key
+                from config.symbol_manager import symbol_manager
+                db_key = symbol_manager.get_db_key(symbol, timeframe)
                 price_data = {
                     'current_price': price,
                     'change_24h': change_24h,
                     'volume': volume,
                     'timestamp': current_time
                 }
-                await self._store_realtime_data(timeframe_symbol, price_data, timeframe)
+                await self._store_realtime_data(db_key, price_data, timeframe)
                 
         except Exception as e:
             ErrorHandler.log_stream_error('candle_update', symbol, str(e))
@@ -381,8 +382,8 @@ class RealTimeWebSocketService:
         except Exception as e:
             ErrorHandler.log_prediction_error('realtime_update', str(e))
     
-    async def _store_realtime_data(self, symbol, price_data, timeframe):
-        """Store real-time price data to database for every update"""
+    async def _store_realtime_data(self, db_key, price_data, timeframe):
+        """Store real-time price data to database"""
         try:
             db = self.database
             if not db or not db.pool:
@@ -395,14 +396,12 @@ class RealTimeWebSocketService:
                 except:
                     return
             
-            # Store every price update (no rate limiting)
-            await db.store_actual_price(symbol, price_data, timeframe)
+            await db.store_actual_price(db_key, price_data, timeframe)
             
-            # Generate and store forecast for this timeframe
             try:
-                base_symbol = symbol.split('_')[0]  # Remove timeframe from symbol
+                base_symbol = db_key.split('_')[0]
                 prediction = await self.model.predict(base_symbol)
-                await db.store_forecast(symbol, prediction)
+                await db.store_forecast(db_key, prediction, timeframe)
             except Exception as e:
                 pass
                 
@@ -485,16 +484,15 @@ class RealTimeWebSocketService:
             print(f"🔑 Cache key: {cache_key}", flush=True)
             
             # Check memory cache first (fastest)
-            if hasattr(self, 'memory_cache') and cache_key in self.memory_cache:
-                cached_data = self.memory_cache[cache_key]
-                if (datetime.now() - cached_data['timestamp']).total_seconds() < 300:  # 5 min TTL
-                    print(f"💾 Using memory cache for {symbol}", flush=True)
-                    await websocket.send_text(cached_data['message'])
-                    return
-                else:
-                    print(f"⏰ Memory cache expired for {symbol}", flush=True)
-            else:
-                print(f"🚫 No memory cache for {symbol}", flush=True)
+            if not hasattr(self, 'memory_cache'):
+                from utils.memory_cache import LRUCache
+                self.memory_cache = LRUCache(maxsize=1000)
+            
+            cached_message = await self.memory_cache.get(cache_key)
+            if cached_message:
+                print(f"💾 Using memory cache for {symbol}", flush=True)
+                await websocket.send_text(cached_message)
+                return
             
             # Try Redis cache
             try:
@@ -515,13 +513,7 @@ class RealTimeWebSocketService:
                 
                 cached_message = redis_client.get(cache_key)
                 if cached_message:
-                    # Cache in memory for next request
-                    if not hasattr(self, 'memory_cache'):
-                        self.memory_cache = {}
-                    self.memory_cache[cache_key] = {
-                        'message': cached_message,
-                        'timestamp': datetime.now()
-                    }
+                    await self.memory_cache.set(cache_key, cached_message, ttl=300)
                     await websocket.send_text(cached_message)
                     return
             except Exception:
@@ -557,12 +549,10 @@ class RealTimeWebSocketService:
             forecast_data = []
             timestamps = []
             
-            # Query attempts with different symbol formats
-            query_attempts = [
-                f"{symbol}_{'4H' if timeframe.lower() == '4h' else timeframe}",  # BTC_4H
-                f"{symbol}_{timeframe}",  # BTC_4h
-                symbol  # BTC (fallback)
-            ]
+            # Use centralized key generation
+            from config.symbol_manager import symbol_manager
+            db_key = symbol_manager.get_db_key(symbol, timeframe)
+            query_attempts = [db_key]
             
             for attempt, query_symbol in enumerate(query_attempts):
                 print(f"📊 TREND API: DB Query attempt {attempt+1}: {query_symbol} (timeframe: {timeframe})")
@@ -612,12 +602,7 @@ class RealTimeWebSocketService:
             message_json = json.dumps(historical_message)
             
             # Cache the message for future connections
-            if not hasattr(self, 'memory_cache'):
-                self.memory_cache = {}
-            self.memory_cache[cache_key] = {
-                'message': message_json,
-                'timestamp': datetime.now()
-            }
+            await self.memory_cache.set(cache_key, message_json, ttl=300)
             
             # Also cache in Redis for 10 minutes
             try:
@@ -643,25 +628,25 @@ class RealTimeWebSocketService:
     async def _store_all_timeframes(self, symbol, price, volume, change_24h):
         """Store price data for all timeframes regardless of connections"""
         try:
+            from config.symbol_manager import symbol_manager
+            from utils.timestamp_utils import TimestampUtils
+            
             current_time = datetime.now()
-            timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+            timeframes = ['1h', '4H', '1D', '1W']
             
             for timeframe in timeframes:
-                timeframe_symbol = f"{symbol}_{timeframe}"
-                
-                # Adjust timestamp for different timeframes to prevent duplicates
-                adjusted_time = self._adjust_timestamp_for_timeframe(current_time, timeframe)
+                db_key = symbol_manager.get_db_key(symbol, timeframe)
+                adjusted_time = TimestampUtils.adjust_for_timeframe(current_time, timeframe)
                 
                 price_data = {
                     'current_price': price,
                     'change_24h': change_24h,
                     'volume': volume,
-                    'timestamp': adjusted_time
+                    'timestamp': adjusted_time,
+                    'data_source': 'binance'
                 }
                 
-                # Store price data with source identifier
-                price_data['data_source'] = 'binance'
-                await self._store_realtime_data(timeframe_symbol, price_data, timeframe)
+                await self._store_realtime_data(db_key, price_data, timeframe)
                 
         except Exception as e:
             ErrorHandler.log_database_error('store_timeframes', symbol, str(e))

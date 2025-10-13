@@ -180,32 +180,28 @@ class TradingDatabase:
             except:
                 pass  # Index already exists
     
-    async def store_forecast(self, symbol, forecast_data, timeframe='1D'):
-        """Store forecast prediction with centralized symbol format - VALIDATES REAL DATA ONLY"""
+    async def store_forecast(self, db_key, forecast_data, timeframe='1D'):
+        """Store forecast prediction - VALIDATES REAL DATA ONLY"""
         if not self.pool:
             return None
         
         # Validate forecast data before storing
         from utils.data_validator import data_validator
         if not data_validator.validate_forecast_data(forecast_data):
-            logging.warning(f"Invalid forecast data rejected for {symbol}")
+            logging.warning(f"Invalid forecast data rejected for {db_key}")
             return None
-        
-        # Use centralized symbol manager for consistent database keys
-        from config.symbol_manager import symbol_manager
-        db_symbol = symbol_manager.get_db_key(symbol, timeframe)
             
         async with self.pool.acquire() as conn:
             return await conn.fetchval("""
                 INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, trend_score)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id
-            """, db_symbol, forecast_data['forecast_direction'], forecast_data['confidence'],
+            """, db_key, forecast_data['forecast_direction'], forecast_data['confidence'],
                 forecast_data.get('predicted_price'), forecast_data.get('predicted_range'),
                 forecast_data.get('trend_score'))
     
-    async def store_actual_price(self, symbol, price_data, timeframe='1D'):
-        """Store actual market price with OHLC data and duplicate handling - VALIDATES REAL DATA ONLY"""
+    async def store_actual_price(self, db_key, price_data, timeframe='1D'):
+        """Store actual market price with OHLC data - VALIDATES REAL DATA ONLY"""
         if not self.pool:
             return
         
@@ -213,16 +209,12 @@ class TradingDatabase:
         from utils.data_validator import data_validator
         source = price_data.get('data_source', 'api')
         if not data_validator.validate_price_data(price_data, source):
-            logging.warning(f"Invalid price data rejected for {symbol}")
+            logging.warning(f"Invalid price data rejected for {db_key}")
             return
         
         if data_validator.is_synthetic_data(price_data):
-            logging.error(f"Synthetic data detected and rejected for {symbol}")
+            logging.error(f"Synthetic data detected and rejected for {db_key}")
             return
-        
-        # Use centralized symbol manager for consistent database keys
-        from config.symbol_manager import symbol_manager
-        db_symbol = symbol_manager.get_db_key(symbol, timeframe)
             
         async with self.pool.acquire() as conn:
             try:
@@ -236,7 +228,7 @@ class TradingDatabase:
                         high = GREATEST(actual_prices.high, EXCLUDED.high),
                         low = LEAST(actual_prices.low, EXCLUDED.low),
                         close_price = EXCLUDED.close_price
-                """, db_symbol, timeframe, 
+                """, db_key, timeframe, 
                     price_data.get('open_price'), price_data.get('high'), 
                     price_data.get('low'), price_data.get('close_price'),
                     price_data['current_price'], price_data.get('change_24h'), 

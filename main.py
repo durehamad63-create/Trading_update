@@ -42,40 +42,15 @@ async def init_database():
             print(f"⚠️ Database connection failed: {e}")
             print("⚠️ Running without database persistence")
 
-# Initialize ML model in background to avoid blocking
-model = None
-
-async def init_model():
-    global model
-    try:
-        model = MobileMLModel()
-        print("✅ ML Model loaded")
-    except Exception as e:
-        print(f"❌ ML Model failed: {e}")
-        # Create minimal fallback model
-        class FallbackModel:
-            async def predict(self, symbol):
-                return {
-                    'symbol': symbol, 'current_price': 100, 'predicted_price': 101,
-                    'forecast_direction': 'HOLD', 'confidence': 50, 'change_24h': 0
-                }
-        model = FallbackModel()
-
-# Load model at startup to prevent None errors
+# Load real ML model at startup - REQUIRED
 print("🔄 Loading ML Model...")
 try:
     model = MobileMLModel()
     print("✅ ML Model loaded successfully")
 except Exception as e:
-    print(f"❌ ML Model failed: {e}")
-    print("🔄 Using fallback model")
-    class FallbackModel:
-        async def predict(self, symbol):
-            return {
-                'symbol': symbol, 'current_price': 50000, 'predicted_price': 50100,
-                'forecast_direction': 'HOLD', 'confidence': 50, 'change_24h': 0.2
-            }
-    model = FallbackModel()
+    print(f"❌ CRITICAL: ML Model failed to load: {e}")
+    print("❌ Application cannot start without ML model")
+    sys.exit(1)
 
 from contextlib import asynccontextmanager
 

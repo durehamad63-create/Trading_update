@@ -25,9 +25,10 @@ class GapFillingService:
         self.macro_symbols = list(MACRO_SYMBOLS.keys())    # 5 macro
         self.all_symbols = self.crypto_symbols + self.stock_symbols + self.macro_symbols
         
-        # Only store higher timeframes - no 1m, 5m, 15m
-        self.crypto_stock_timeframes = ['1h', '4H', '1D', '7D', '1W', '1M']
-        self.macro_timeframes = ['1D', '7D', '1W', '1M']
+        # Only native API intervals - no synthetic aggregation
+        self.crypto_timeframes = ['1h', '4H', '1D', '1W', '1M']  # Binance native
+        self.stock_timeframes = ['1h', '1D', '1W', '1M']  # Yahoo native (removed 4H, 7D)
+        self.macro_timeframes = ['1D', '1W', '1M']  # FRED native (removed 7D)
         
         # Maintain exactly 200 records per timeframe
         self.max_records = 200
@@ -52,7 +53,9 @@ class GapFillingService:
         print(f"   📈 Crypto: {len(self.crypto_symbols)} symbols")
         print(f"   📊 Stocks: {len(self.stock_symbols)} symbols") 
         print(f"   🏛️ Macro: {len(self.macro_symbols)} symbols")
-        print(f"   ⏱️ Timeframes: {self.crypto_stock_timeframes}")
+        print(f"   ⏱️ Crypto timeframes: {self.crypto_timeframes}")
+        print(f"   ⏱️ Stock timeframes: {self.stock_timeframes}")
+        print(f"   ⏱️ Macro timeframes: {self.macro_timeframes}")
         print(f"   📊 Max records per timeframe: {self.max_records}")
     
     async def fill_missing_data(self, db_instance):
@@ -76,10 +79,10 @@ class GapFillingService:
         total_processed = 0
         total_accuracy = 0
         
-        # Process all asset classes
+        # Process all asset classes with correct timeframes
         for asset_class, symbols, timeframes in [
-            ("crypto", self.crypto_symbols, self.crypto_stock_timeframes),
-            ("stocks", self.stock_symbols, self.crypto_stock_timeframes), 
+            ("crypto", self.crypto_symbols, self.crypto_timeframes),
+            ("stocks", self.stock_symbols, self.stock_timeframes), 
             ("macro", self.macro_symbols, self.macro_timeframes)
         ]:
             print(f"📊 Processing {asset_class} assets: {len(symbols)} symbols")
@@ -145,7 +148,7 @@ class GapFillingService:
             async with self.db.pool.acquire() as conn:
                 # Check all 25 symbols across key timeframes
                 all_symbols = self.crypto_symbols + self.stock_symbols + self.macro_symbols
-                key_timeframes = ['1D', '4H', '1h']  # Check main timeframes
+                key_timeframes = ['1D', '1H']  # Check main timeframes
                 
                 symbols_with_data = 0
                 total_checks = len(all_symbols) * len(key_timeframes)
@@ -257,25 +260,19 @@ class GapFillingService:
         """Get stock data from Yahoo Finance with proper intervals"""
         for retry in range(3):
             try:
-                # Get appropriate range and interval for real data
+                # Get appropriate range and interval - NATIVE ONLY
                 if timeframe == '1h':
                     yahoo_interval = '1h'
-                    yahoo_range = '730d'  # 2 years of hourly data
-                elif timeframe == '4H':
-                    yahoo_interval = '1h'  # Get hourly, aggregate to 4H
                     yahoo_range = '730d'
                 elif timeframe == '1D':
                     yahoo_interval = '1d'
-                    yahoo_range = '5y'  # 5 years of daily data
-                elif timeframe == '7D':
-                    yahoo_interval = '1d'  # Get daily, aggregate to weekly
                     yahoo_range = '5y'
                 elif timeframe == '1W':
                     yahoo_interval = '1wk'
-                    yahoo_range = '10y'  # 10 years of weekly data
+                    yahoo_range = '10y'
                 elif timeframe == '1M':
                     yahoo_interval = '1mo'
-                    yahoo_range = '10y'  # 10 years of monthly data
+                    yahoo_range = '10y'
                 else:
                     yahoo_interval = '1d'
                     yahoo_range = '2y'
@@ -309,12 +306,6 @@ class GapFillingService:
                                 'volume': float(indicators['volume'][i]) if indicators['volume'][i] else 0
                             })
                     
-                    # Aggregate if needed for higher timeframes
-                    if timeframe == '4H' and yahoo_interval == '1h':
-                        data = self._real_aggregate_to_4h(data)
-                    elif timeframe == '7D' and yahoo_interval == '1d':
-                        data = self._real_aggregate_to_weekly(data)
-                    
                     # Take last 200 records only
                     data = data[-200:] if len(data) > 200 else data
                     
@@ -333,122 +324,7 @@ class GapFillingService:
                     print(f"    ❌ Failed after 3 retries for {symbol} {timeframe}: {e}")
         return []
     
-    def _real_aggregate_to_4h(self, hourly_data: List[Dict]) -> List[Dict]:
-        """Aggregate real hourly data to 4-hour candles"""
-        if not hourly_data:
-            return []
-        
-        four_hour_data = []
-        i = 0
-        
-        while i < len(hourly_data) - 3:
-            chunk = hourly_data[i:i+4]
-            if len(chunk) == 4:
-                four_hour_data.append({
-                    'timestamp': chunk[-1]['timestamp'],
-                    'open': chunk[0]['open'],
-                    'high': max(d['high'] for d in chunk),
-                    'low': min(d['low'] for d in chunk),
-                    'close': chunk[-1]['close'],
-                    'volume': sum(d['volume'] for d in chunk)
-                })
-            i += 4
-        
-        return four_hour_data
-    
-    def _real_aggregate_to_weekly(self, daily_data: List[Dict]) -> List[Dict]:
-        """Aggregate real daily data to weekly candles"""
-        if not daily_data:
-            return []
-        
-        weekly_data = []
-        i = 0
-        
-        while i < len(daily_data) - 4:
-            week_end = min(i + 7, len(daily_data))
-            week_data = daily_data[i:week_end]
-            
-            if len(week_data) >= 5:
-                weekly_data.append({
-                    'timestamp': week_data[-1]['timestamp'],
-                    'open': week_data[0]['open'],
-                    'high': max(d['high'] for d in week_data),
-                    'low': min(d['low'] for d in week_data),
-                    'close': week_data[-1]['close'],
-                    'volume': sum(d['volume'] for d in week_data)
-                })
-            i += 7
-        
-        return weekly_data
-    
-    def _aggregate_to_4h(self, data: List[Dict]) -> List[Dict]:
-        """Aggregate hourly data to 4-hour candles"""
-        if not data:
-            return []
-        
-        aggregated = []
-        i = 0
-        
-        while i < len(data) - 3:
-            chunk = data[i:i+4]
-            if len(chunk) >= 2:
-                aggregated.append({
-                    'timestamp': chunk[-1]['timestamp'],
-                    'open': chunk[0]['open'],
-                    'high': max(d['high'] for d in chunk),
-                    'low': min(d['low'] for d in chunk),
-                    'close': chunk[-1]['close'],
-                    'volume': sum(d['volume'] for d in chunk)
-                })
-            i += 4
-        
-        return aggregated
-    
-    def _aggregate_to_7d(self, data: List[Dict]) -> List[Dict]:
-        """Aggregate daily data to 7-day periods"""
-        if not data:
-            return []
-        
-        aggregated = []
-        i = 0
-        
-        while i < len(data) - 6:
-            chunk = data[i:i+7]
-            if len(chunk) >= 5:
-                aggregated.append({
-                    'timestamp': chunk[-1]['timestamp'],
-                    'open': chunk[0]['open'],
-                    'high': max(d['high'] for d in chunk),
-                    'low': min(d['low'] for d in chunk),
-                    'close': chunk[-1]['close'],
-                    'volume': sum(d['volume'] for d in chunk)
-                })
-            i += 7
-        
-        return aggregated
-    
-    def _aggregate_to_1m(self, data: List[Dict]) -> List[Dict]:
-        """Aggregate daily data to monthly periods"""
-        if not data:
-            return []
-        
-        aggregated = []
-        i = 0
-        
-        while i < len(data) - 29:
-            chunk = data[i:i+30]
-            if len(chunk) >= 20:
-                aggregated.append({
-                    'timestamp': chunk[-1]['timestamp'],
-                    'open': chunk[0]['open'],
-                    'high': max(d['high'] for d in chunk),
-                    'low': min(d['low'] for d in chunk),
-                    'close': chunk[-1]['close'],
-                    'volume': sum(d['volume'] for d in chunk)
-                })
-            i += 30
-        
-        return aggregated
+
     
     async def _get_macro_data(self, symbol: str, timeframe: str) -> List[Dict]:
         """Get real macro economic data from FRED API"""
@@ -486,16 +362,17 @@ class GapFillingService:
             if fred_data is None or len(fred_data) == 0:
                 raise Exception(f"No FRED data for {symbol}")
             
-            # Convert to required format
+            # Convert to required format - REAL DATA ONLY
             data = []
             for timestamp, value in fred_data.items():
+                current_value = float(value)
                 data.append({
                     'timestamp': timestamp,
-                    'open': float(value),
-                    'high': float(value) * 1.001,
-                    'low': float(value) * 0.999,
-                    'close': float(value),
-                    'volume': 1000000
+                    'open': current_value,
+                    'high': current_value,  # Same as close - no fake data
+                    'low': current_value,   # Same as close - no fake data
+                    'close': current_value,
+                    'volume': 0             # No volume for macro indicators
                 })
             
             # Take last max_records
@@ -623,7 +500,7 @@ class GapFillingService:
                 confidence = max(50, min(95, int(75 + prediction_strength - volatility * 100)))
                 
                 predictions.append({
-                    'timestamp': data[i]['timestamp'],
+                    'timestamp': data[i-1]['timestamp'],  # Fixed: use i-1 to match actual data used
                     'actual_price': current_price,
                     'predicted_price': predicted_price,
                     'forecast_direction': forecast_direction,
@@ -681,16 +558,9 @@ class GapFillingService:
             for item in sorted(data, key=lambda x: x['timestamp']):
                 current_time = item['timestamp']
                 
-                # Light timestamp normalization only
-                if timeframe == '1h':
-                    normalized_timestamp = current_time.replace(minute=0, second=0, microsecond=0)
-                elif timeframe == '4H':
-                    hour = (current_time.hour // 4) * 4
-                    normalized_timestamp = current_time.replace(hour=hour, minute=0, second=0, microsecond=0)
-                elif timeframe == '1D':
-                    normalized_timestamp = current_time.replace(hour=0, minute=0, second=0, microsecond=0)
-                else:
-                    normalized_timestamp = current_time.replace(second=0, microsecond=0)
+                # Timestamp normalization using centralized utility
+                from utils.timestamp_utils import TimestampUtils
+                normalized_timestamp = TimestampUtils.adjust_for_timeframe(current_time, timeframe)
                 
                 filtered_data.append({
                     **item,

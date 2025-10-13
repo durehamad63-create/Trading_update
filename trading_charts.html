@@ -30,6 +30,10 @@
         <h1>Trading AI Platform - Charts & Trends</h1>
         
         <div class="controls">
+            <select id="environmentSelect" onchange="updateEnvironment()">
+                <option value="localhost">Localhost</option>
+                <option value="railway">Railway (Production)</option>
+            </select>
             <input type="text" id="symbolInput" placeholder="Enter symbol (e.g., BTC, NVDA)" value="BTC">
             <select id="timeframeSelect">
                 <option value="1h">1 Hour</option>
@@ -81,7 +85,20 @@
         let priceChart = null;
         let trendsChart = null;
         let ws = null;
-        const API_BASE = 'http://localhost:8000/api';
+        let API_BASE = 'http://localhost:8000/api';
+        let WS_BASE = 'ws://localhost:8000/ws';
+
+        function updateEnvironment() {
+            const env = document.getElementById('environmentSelect').value;
+            if (env === 'railway') {
+                API_BASE = 'https://lavish-peace-production.up.railway.app/api';
+                WS_BASE = 'wss://lavish-peace-production.up.railway.app/ws';
+            } else {
+                API_BASE = 'http://localhost:8000/api';
+                WS_BASE = 'ws://localhost:8000/ws';
+            }
+            showStatus(`Switched to ${env === 'railway' ? 'Railway Production' : 'Localhost'}`, 'success');
+        }
 
         function showStatus(message, type = 'success') {
             const status = document.getElementById('status');
@@ -291,7 +308,7 @@
             }
 
             try {
-                ws = new WebSocket(`ws://localhost:8000/ws/chart/${symbol}`);
+                ws = new WebSocket(`${WS_BASE}/chart/${symbol}`);
                 
                 ws.onopen = () => {
                     showStatus(`Connected to ${symbol} live stream`, 'success');
@@ -335,15 +352,9 @@
             priceChart.update('none');
         }
 
-        // Load initial chart on page load
+        // Setup event listeners on page load
         window.onload = () => {
-            loadChart();
-            loadTrends();
-            
-            // Auto-reload trends when timeframe changes
-            document.getElementById('timeframeSelect').addEventListener('change', () => {
-                loadTrends();
-            });
+            // Don't auto-load charts on refresh
         };
 
         // Admin Panel Functions

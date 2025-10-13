@@ -10,7 +10,9 @@ class SymbolManager:
     @staticmethod
     def get_db_key(symbol: str, timeframe: str) -> str:
         """Generate consistent database key for symbol-timeframe combination"""
-        return f"{symbol}_{timeframe}"
+        # Normalize timeframe to uppercase for consistency
+        timeframe_normalized = timeframe.upper()
+        return f"{symbol}_{timeframe_normalized}"
     
     @staticmethod
     def get_binance_symbol(symbol: str) -> str:

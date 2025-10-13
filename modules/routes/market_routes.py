@@ -23,89 +23,199 @@ def setup_market_routes(app: FastAPI, model, database):
         if class_param == "crypto":
             symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX'][:limit]
             for symbol in symbols:
-                cache_key = cache_keys.price(symbol, 'crypto')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and realtime_service:
-                    price_data = realtime_service.price_cache.get(symbol)
-                
-                if not price_data:
-                    api_data = await multi_asset.get_asset_data(symbol)
-                    price_data = {
-                        'current_price': api_data['current_price'],
-                        'change_24h': api_data['change_24h'],
-                        'volume': api_data.get('volume', 0)
-                    }
-                
-                if price_data:
-                    prediction = await model.predict(symbol)
+                try:
+                    # Use cached price from realtime service
+                    price_data = None
+                    if realtime_service and symbol in realtime_service.price_cache:
+                        price_data = realtime_service.price_cache[symbol]
+                    
+                    if not price_data:
+                        cache_key = cache_keys.price(symbol, 'crypto')
+                        price_data = cache_manager.get_cache(cache_key)
+                    
+                    # Fallback to database
+                    if not price_data and database and database.pool:
+                        try:
+                            from config.symbol_manager import symbol_manager
+                            db_key = symbol_manager.get_db_key(symbol, '1D')
+                            async with database.pool.acquire() as conn:
+                                row = await conn.fetchrow(
+                                    "SELECT price, volume, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 1",
+                                    db_key
+                                )
+                                if row:
+                                    price_data = {
+                                        'current_price': float(row['price']),
+                                        'change_24h': 0.0,
+                                        'volume': float(row['volume']) if row['volume'] else 0
+                                    }
+                        except Exception:
+                            pass
+                    
+                    if not price_data:
+                        continue
+                    
+                    # Get prediction from cache
+                    pred_cache_key = cache_keys.prediction(symbol)
+                    prediction = cache_manager.get_cache(pred_cache_key)
+                    
+                    if not prediction:
+                        prediction = {
+                            'forecast_direction': 'HOLD',
+                            'confidence': 75,
+                            'predicted_price': price_data['current_price']
+                        }
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
                         'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
+                        'change_24h': price_data.get('change_24h', 0),
+                        'volume': price_data.get('volume', 0),
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
+                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
                         'asset_class': 'crypto'
                     })
+                except Exception as e:
+                    print(f"Error processing {symbol}: {e}")
+                    continue
         
         elif class_param == "stocks":
             symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM'][:limit]
             for symbol in symbols:
-                cache_key = cache_keys.price(symbol, 'stock')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and stock_realtime_service:
-                    price_data = stock_realtime_service.price_cache.get(symbol)
-                
-                if not price_data:
-                    api_data = await multi_asset.get_asset_data(symbol)
-                    price_data = {
-                        'current_price': api_data['current_price'],
-                        'change_24h': api_data['change_24h'],
-                        'volume': api_data.get('volume', 0)
-                    }
-                
-                if price_data:
-                    prediction = await model.predict(symbol)
+                try:
+                    price_data = None
+                    if stock_realtime_service and symbol in stock_realtime_service.price_cache:
+                        price_data = stock_realtime_service.price_cache[symbol]
+                    
+                    if not price_data:
+                        cache_key = cache_keys.price(symbol, 'stock')
+                        price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data:
+                        continue
+                    
+                    pred_cache_key = cache_keys.prediction(symbol)
+                    prediction = cache_manager.get_cache(pred_cache_key)
+                    
+                    if not prediction:
+                        prediction = {
+                            'forecast_direction': 'HOLD',
+                            'confidence': 75,
+                            'predicted_price': price_data['current_price']
+                        }
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
                         'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
-                        'volume': price_data['volume'],
+                        'change_24h': price_data.get('change_24h', 0),
+                        'volume': price_data.get('volume', 0),
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
+                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
                         'asset_class': 'stocks'
                     })
+                except Exception as e:
+                    print(f"Error processing {symbol}: {e}")
+                    continue
         
         elif class_param == "macro":
             symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
             for symbol in symbols:
-                cache_key = cache_keys.price(symbol, 'macro')
-                price_data = cache_manager.get_cache(cache_key)
-                
-                if not price_data and macro_realtime_service:
-                    price_data = macro_realtime_service.price_cache.get(symbol)
-                
-                if not price_data:
-                    price_data = multi_asset._get_macro_data(symbol)
-                
-                if price_data:
-                    prediction = await model.predict(symbol)
+                try:
+                    price_data = None
+                    if macro_realtime_service and symbol in macro_realtime_service.price_cache:
+                        price_data = macro_realtime_service.price_cache[symbol]
+                    
+                    if not price_data:
+                        cache_key = cache_keys.price(symbol, 'macro')
+                        price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data:
+                        price_data = multi_asset._get_macro_data(symbol)
+                    
+                    if not price_data:
+                        continue
+                    
+                    pred_cache_key = cache_keys.prediction(symbol)
+                    prediction = cache_manager.get_cache(pred_cache_key)
+                    
+                    if not prediction:
+                        prediction = {
+                            'forecast_direction': 'HOLD',
+                            'confidence': 75,
+                            'predicted_price': price_data['current_price']
+                        }
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
                         'current_price': price_data['current_price'],
-                        'change_24h': price_data['change_24h'],
+                        'change_24h': price_data.get('change_24h', 0),
                         'volume': price_data.get('volume', 0),
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
+                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
                         'asset_class': 'macro'
                     })
+                except Exception as e:
+                    print(f"Error processing {symbol}: {e}")
+                    continue
         
-        return {"assets": assets}
+        elif class_param == "all":
+            # Combine all asset classes
+            all_symbols = [
+                ('BTC', 'crypto'), ('ETH', 'crypto'), ('BNB', 'crypto'),
+                ('NVDA', 'stocks'), ('MSFT', 'stocks'), ('AAPL', 'stocks'),
+                ('GDP', 'macro'), ('CPI', 'macro')
+            ][:limit]
+            
+            for symbol, asset_class in all_symbols:
+                try:
+                    price_data = None
+                    
+                    if asset_class == 'crypto' and realtime_service:
+                        price_data = realtime_service.price_cache.get(symbol)
+                    elif asset_class == 'stocks' and stock_realtime_service:
+                        price_data = stock_realtime_service.price_cache.get(symbol)
+                    elif asset_class == 'macro' and macro_realtime_service:
+                        price_data = macro_realtime_service.price_cache.get(symbol)
+                    
+                    if not price_data:
+                        cache_key = cache_keys.price(symbol, asset_class)
+                        price_data = cache_manager.get_cache(cache_key)
+                    
+                    if not price_data:
+                        continue
+                    
+                    pred_cache_key = cache_keys.prediction(symbol)
+                    prediction = cache_manager.get_cache(pred_cache_key)
+                    
+                    if not prediction:
+                        prediction = {
+                            'forecast_direction': 'HOLD',
+                            'confidence': 75,
+                            'predicted_price': price_data['current_price']
+                        }
+                    
+                    assets.append({
+                        'symbol': symbol,
+                        'name': multi_asset.get_asset_name(symbol),
+                        'current_price': price_data['current_price'],
+                        'change_24h': price_data.get('change_24h', 0),
+                        'volume': price_data.get('volume', 0),
+                        'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
+                        'confidence': prediction.get('confidence', 75),
+                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'asset_class': asset_class
+                    })
+                except Exception as e:
+                    print(f"Error processing {symbol}: {e}")
+                    continue
+        
+        return {"assets": assets, "total": len(assets)}
     
     @app.get("/api/assets/search")
     async def search_assets(query: str):

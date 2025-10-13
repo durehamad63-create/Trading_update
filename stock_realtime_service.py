@@ -101,15 +101,15 @@ class StockRealtimeService:
                 # Cache using centralized manager
                 cache_key = self.cache_keys.price(symbol, 'stock')
                 self.cache_manager.set_cache(cache_key, cache_data, ttl=30)
-                # Always store data for all timeframes (regardless of connections)
-                asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
-                
                 # Update candles and broadcast only if connections exist
                 if symbol in self.active_connections and self.active_connections[symbol]:
                     # Immediate price broadcast
                     asyncio.create_task(self._broadcast_stock_price_update(symbol, price_data))
-                    # ML predictions in background
+                    # ML predictions in background (stores data internally)
                     asyncio.create_task(self._update_stock_candles_and_forecast(symbol, price_data))
+                else:
+                    # Store data for all timeframes even without active connections
+                    asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
         except Exception as e:
             print(f"❌ Stock {symbol} error: {e}")
             ErrorHandler.log_stream_error('stock', symbol, str(e))
@@ -336,30 +336,28 @@ class StockRealtimeService:
     async def _store_stock_data_all_timeframes(self, symbol, price_data):
         """Store stock price data for all timeframes"""
         try:
+            from config.symbol_manager import symbol_manager
+            from utils.timestamp_utils import TimestampUtils
+            
             current_time = datetime.now()
-            timeframes = ['1m', '5m', '15m', '1h', '4H', '1D', '1W']
+            timeframes = ['1h', '4H', '1D', '1W']
             
             for timeframe in timeframes:
-                timeframe_symbol = f"{symbol}_{timeframe}"
+                db_key = symbol_manager.get_db_key(symbol, timeframe)
+                adjusted_time = TimestampUtils.adjust_for_timeframe(current_time, timeframe)
                 
-                # Adjust timestamp for timeframe to prevent duplicates
-                adjusted_time = self._adjust_timestamp_for_timeframe(current_time, timeframe)
-                
-                # Update price data with adjusted timestamp
                 adjusted_price_data = {
                     **price_data,
-                    'timestamp': adjusted_time
+                    'timestamp': adjusted_time,
+                    'data_source': 'yahoo'
                 }
                 
-                # Store price data with source identifier
-                adjusted_price_data['data_source'] = 'yahoo'
                 if self.database and self.database.pool:
-                    await self.database.store_actual_price(timeframe_symbol, adjusted_price_data, timeframe)
+                    await self.database.store_actual_price(db_key, adjusted_price_data, timeframe)
                     
-                    # Generate and store forecast
                     try:
                         prediction = await self.model.predict(symbol)
-                        await self.database.store_forecast(timeframe_symbol, prediction)
+                        await self.database.store_forecast(db_key, prediction, timeframe)
                     except Exception:
                         pass
                         
@@ -527,12 +525,10 @@ class StockRealtimeService:
             forecast_data = []
             timestamps = []
             
-            # Query attempts with different symbol formats
-            query_attempts = [
-                f"{symbol}_{'4H' if timeframe.lower() == '4h' else timeframe}",  # NVDA_4H
-                f"{symbol}_{timeframe}",  # NVDA_4h
-                symbol  # NVDA (fallback)
-            ]
+            # Use centralized key generation
+            from config.symbol_manager import symbol_manager
+            db_key = symbol_manager.get_db_key(symbol, timeframe)
+            query_attempts = [db_key]
             
             for attempt, query_symbol in enumerate(query_attempts):
                 print(f"📊 Stock DB Query attempt {attempt+1}: {query_symbol}")
