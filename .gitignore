@@ -19,3 +19,4 @@ utils/enhanced_rate_limiter.py
 config/rate_limits.py
 postman
 Admin_Routes.postman_collection.json
+mobile_ui.html

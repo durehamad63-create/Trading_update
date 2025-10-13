@@ -577,7 +577,7 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8000';
+        const API_BASE = 'https://lavish-peace-production.up.railway.app';
         let currentSymbol = null;
         let currentTimeframe = '1D';
         let ws = null;
@@ -796,7 +796,7 @@
         function connectWebSocket(symbol, timeframe) {
             if (ws) ws.close();
 
-            ws = new WebSocket(`ws://localhost:8000/ws/asset/${symbol}/forecast?timeframe=${timeframe}`);
+            ws = new WebSocket(`wss://lavish-peace-production.up.railway.app/ws/asset/${symbol}/forecast?timeframe=${timeframe}`);
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);

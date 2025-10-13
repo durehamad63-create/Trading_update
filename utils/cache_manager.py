@@ -13,17 +13,27 @@ class CacheManager:
     def get_redis_client(cls):
         if cls._redis_client is None:
             try:
+                redis_host = os.getenv('REDIS_HOST', 'localhost')
+                redis_port = int(os.getenv('REDIS_PORT', '6379'))
+                redis_password = os.getenv('REDIS_PASSWORD')
+                
+                print(f"🔄 Connecting to Redis: {redis_host}:{redis_port}")
+                
                 cls._redis_client = redis.Redis(
-                    host=os.getenv('REDIS_HOST', 'localhost'),
-                    port=int(os.getenv('REDIS_PORT', '6379')),
-                    db=0,  # Railway uses single DB
-                    password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
+                    host=redis_host,
+                    port=redis_port,
+                    db=0,
+                    password=redis_password if redis_password else None,
                     decode_responses=True,
-                    socket_connect_timeout=10,
-                    socket_timeout=10
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                    retry_on_timeout=True,
+                    health_check_interval=30
                 )
                 cls._redis_client.ping()
-            except Exception:
+                print(f"✅ Redis connected: {redis_host}:{redis_port}")
+            except Exception as e:
+                print(f"❌ Redis connection failed: {e}")
                 cls._redis_client = None
         return cls._redis_client
     
