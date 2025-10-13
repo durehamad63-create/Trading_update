@@ -21,6 +21,7 @@ class CacheManager:
     _redis_client = None
     _memory_cache = {}  # Fallback memory cache
     _cache_timestamps = {}  # Track TTL for memory cache
+    _max_memory_cache_size = 1000  # Limit memory cache size
     
     @classmethod
     def get_redis_client(cls):
@@ -49,7 +50,15 @@ class CacheManager:
     @classmethod
     def set_cache(cls, key, value, ttl=60):
         """Set cache with Redis primary, memory fallback"""
-        # Always store in memory cache as fallback
+        # Enforce memory cache size limit (LRU eviction)
+        if len(cls._memory_cache) >= cls._max_memory_cache_size:
+            # Remove oldest entry
+            oldest_key = min(cls._cache_timestamps.keys(), 
+                           key=lambda k: cls._cache_timestamps[k][0])
+            cls._memory_cache.pop(oldest_key, None)
+            cls._cache_timestamps.pop(oldest_key, None)
+        
+        # Store in memory cache as fallback
         cls._memory_cache[key] = value
         cls._cache_timestamps[key] = (time.time(), ttl)
         
@@ -58,8 +67,9 @@ class CacheManager:
             client = cls.get_redis_client()
             if client:
                 client.setex(key, ttl, json.dumps(value, default=str))
-        except Exception:
-            pass  # Memory cache already set
+        except Exception as e:
+            import logging
+            logging.warning(f"Redis cache set failed for {key}: {e}")
     
     @classmethod
     def get_cache(cls, key):
@@ -71,8 +81,9 @@ class CacheManager:
                 data = client.get(key)
                 if data:
                     return json.loads(data)
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.debug(f"Redis cache get failed for {key}: {e}")
         
         # Fallback to memory cache
         if key in cls._memory_cache:
@@ -85,6 +96,41 @@ class CacheManager:
                 cls._cache_timestamps.pop(key, None)
         
         return None
+    
+    @classmethod
+    def delete_cache(cls, key):
+        """Delete cache entry from both Redis and memory"""
+        # Remove from memory
+        cls._memory_cache.pop(key, None)
+        cls._cache_timestamps.pop(key, None)
+        
+        # Remove from Redis
+        try:
+            client = cls.get_redis_client()
+            if client:
+                client.delete(key)
+        except Exception as e:
+            import logging
+            logging.warning(f"Redis cache delete failed for {key}: {e}")
+    
+    @classmethod
+    def clear_pattern(cls, pattern):
+        """Clear cache entries matching pattern (e.g., 'prediction:BTC:*')"""
+        # Clear from memory
+        keys_to_remove = [k for k in cls._memory_cache.keys() if pattern.replace('*', '') in k]
+        for key in keys_to_remove:
+            cls._memory_cache.pop(key, None)
+            cls._cache_timestamps.pop(key, None)
+        
+        # Clear from Redis
+        try:
+            client = cls.get_redis_client()
+            if client:
+                for key in client.scan_iter(match=pattern):
+                    client.delete(key)
+        except Exception as e:
+            import logging
+            logging.warning(f"Redis pattern clear failed for {pattern}: {e}")
 
 class CacheKeys:
     # Unified key patterns
