@@ -5,12 +5,15 @@ import asyncio
 import json
 import logging
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 import os
 import numpy as np
 from dotenv import load_dotenv
 from utils.error_handler import ErrorHandler
+from utils.websocket_security import WebSocketSecurity
+
+logger = logging.getLogger(__name__)
 
 class MacroRealtimeService:
     def __init__(self, model=None, database=None):
@@ -77,7 +80,7 @@ class MacroRealtimeService:
                         'current_price': new_value,
                         'change_24h': change_pct,
                         'volume': 1000000,
-                        'timestamp': datetime.now(),
+                        'timestamp': WebSocketSecurity.get_utc_now(),
                         'unit': config['unit']
                     }
                     self.price_cache[symbol] = cache_data
@@ -127,6 +130,7 @@ class MacroRealtimeService:
                 await self._broadcast_to_timeframe(symbol, timeframe, macro_data)
                 
         except Exception as e:
+            logger.error(f"Macro broadcast error: {e}", exc_info=True)
             ErrorHandler.log_websocket_error('macro_broadcast', str(e))
     
     async def _store_macro_data_all_timeframes(self, symbol, price_data):

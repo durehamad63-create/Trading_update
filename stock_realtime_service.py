@@ -5,12 +5,14 @@ import asyncio
 import json
 import logging
 import aiohttp
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
-# Removed yfinance import - using direct API calls
 import os
 from dotenv import load_dotenv
 from utils.error_handler import ErrorHandler
+from utils.websocket_security import WebSocketSecurity
+
+logger = logging.getLogger(__name__)
 
 class StockRealtimeService:
     def __init__(self, model=None, database=None):
@@ -92,10 +94,10 @@ class StockRealtimeService:
             price_data = await self._get_realtime_stock_data(symbol)
             if price_data:
 
-                # Update cache
+                # Update cache with timezone-aware timestamp
                 cache_data = {
                     **price_data,
-                    'timestamp': datetime.now()
+                    'timestamp': WebSocketSecurity.get_utc_now()
                 }
                 self.price_cache[symbol] = cache_data
                 
@@ -112,7 +114,7 @@ class StockRealtimeService:
                     # Store data for all timeframes even without active connections
                     asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
         except Exception as e:
-            print(f"❌ Stock {symbol} error: {e}")
+            logger.error(f"Stock {symbol} error: {e}", exc_info=True)
             ErrorHandler.log_stream_error('stock', symbol, str(e))
     
 
@@ -218,6 +220,7 @@ class StockRealtimeService:
                 self.last_update[rate_key] = current_time
                 
         except Exception as e:
+            logger.error(f"Stock candle error for {symbol}: {e}", exc_info=True)
             ErrorHandler.log_stream_error('stock_candle', symbol, str(e))
     
     async def _update_stock_candle_data(self, symbol, timeframe, price_data, timestamp):

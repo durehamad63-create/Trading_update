@@ -6,13 +6,16 @@ import asyncio
 import websockets
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from modules.ml_predictor import MobileMLModel
 from multi_asset_support import MultiAssetSupport, multi_asset
 from config.symbols import CRYPTO_SYMBOLS
 from utils.error_handler import ErrorHandler
 from utils.cache_manager import CacheKeys
+from utils.websocket_security import WebSocketSecurity
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 class RealTimeWebSocketService:
     def __init__(self, model=None, database=None):
@@ -73,7 +76,7 @@ class RealTimeWebSocketService:
                                 'current_price': 1.0,
                                 'change_24h': 0.0,
                                 'volume': 1000000000,
-                                'timestamp': datetime.now()
+                                'timestamp': WebSocketSecurity.get_utc_now()
                             }
                             continue
                         
@@ -83,10 +86,10 @@ class RealTimeWebSocketService:
                             if response.status == 200:
                                 data = await response.json()
                                 price_data = {
-                                    'current_price': float(data['lastPrice']),
-                                    'change_24h': float(data['priceChangePercent']),
-                                    'volume': float(data['volume']),
-                                    'timestamp': datetime.now()
+                                    'current_price': WebSocketSecurity.safe_float(data.get('lastPrice', 0)),
+                                    'change_24h': WebSocketSecurity.safe_float(data.get('priceChangePercent', 0)),
+                                    'volume': WebSocketSecurity.safe_float(data.get('volume', 0)),
+                                    'timestamp': WebSocketSecurity.get_utc_now()
                                 }
                                 self.price_cache[symbol] = price_data
                                 
@@ -116,7 +119,7 @@ class RealTimeWebSocketService:
                         'current_price': 1.0,
                         'change_24h': 0.0,
                         'volume': 1000000000,  # High volume for stablecoins
-                        'timestamp': datetime.now()
+                        'timestamp': WebSocketSecurity.get_utc_now()
                     }
     
                 
@@ -146,17 +149,17 @@ class RealTimeWebSocketService:
                         try:
                             data = json.loads(message)
                             
-                            # Extract real-time price data
-                            current_price = float(data['c'])  # Current price
-                            change_24h = float(data['P'])     # 24h change %
-                            volume = float(data['v'])         # Volume
+                            # Extract real-time price data with safe conversion
+                            current_price = WebSocketSecurity.safe_float(data.get('c', 0))
+                            change_24h = WebSocketSecurity.safe_float(data.get('P', 0))
+                            volume = WebSocketSecurity.safe_float(data.get('v', 0))
                             
-                            # Update price cache
+                            # Update price cache with timezone-aware timestamp
                             price_data = {
                                 'current_price': current_price,
                                 'change_24h': change_24h,
                                 'volume': volume,
-                                'timestamp': datetime.now()
+                                'timestamp': WebSocketSecurity.get_utc_now()
                             }
                             self.price_cache[symbol] = price_data
                             
@@ -177,12 +180,13 @@ class RealTimeWebSocketService:
                                 asyncio.create_task(self._store_all_timeframes(symbol, current_price, volume, change_24h))
                             
                         except Exception as e:
+                            logger.error(f"Binance message error for {symbol}: {e}", exc_info=True)
                             ErrorHandler.log_stream_error('binance_message', symbol, str(e))
                             continue
                         
             except Exception as e:
                 error_msg = str(e)
-                print(f"❌ {symbol} stream error: {error_msg}")
+                logger.error(f"{symbol} stream error: {error_msg}", exc_info=True)
                 
                 # Railway-specific error handling
                 if "403" in error_msg or "forbidden" in error_msg.lower():
@@ -233,6 +237,7 @@ class RealTimeWebSocketService:
                 await self._store_realtime_data(db_key, price_data, timeframe)
                 
         except Exception as e:
+            logger.error(f"Candle update error for {symbol}: {e}", exc_info=True)
             ErrorHandler.log_stream_error('candle_update', symbol, str(e))
     
     def _get_update_interval(self, timeframe):
@@ -320,6 +325,7 @@ class RealTimeWebSocketService:
                 await self._broadcast_to_timeframe(symbol, timeframe, price_data)
                 
         except Exception as e:
+            logger.error(f"Broadcast error: {e}", exc_info=True)
             ErrorHandler.log_websocket_error('broadcast', str(e))
     
     async def _generate_timeframe_forecast(self, symbol, timeframe, current_time):
