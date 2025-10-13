@@ -115,8 +115,21 @@ async def lifespan(app: FastAPI):
     async def setup_database():
         try:
             await init_database()
-            # Only start gap filling if database is actually connected
+            
+            # Only proceed if database is connected
             if db and db.pool and db.connection_status == 'connected':
+                # Clean database on startup if env var set
+                clean_on_startup = os.getenv('CLEAN_DB_ON_STARTUP', 'false').lower() == 'true'
+                if clean_on_startup:
+                    try:
+                        print("🧹 Cleaning database on startup...")
+                        async with db.pool.acquire() as conn:
+                            await conn.execute("TRUNCATE TABLE actual_prices, forecasts, forecast_accuracy RESTART IDENTITY CASCADE")
+                        print("✅ Database cleaned")
+                    except Exception as e:
+                        print(f"⚠️ Database cleanup failed: {e}")
+                        print("ℹ️ Continuing without cleanup...")
+                
                 print("🔄 Starting gap filling...")
                 from gap_filling_service import GapFillingService
                 gap_filler = GapFillingService(model)

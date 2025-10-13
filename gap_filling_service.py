@@ -509,28 +509,128 @@ class GapFillingService:
             return []
     
     async def _generate_ml_predictions(self, data: List[Dict], symbol: str, timeframe: str, asset_class: str) -> List[Dict]:
-        """Generate ML predictions using real model"""
+        """Generate ML predictions using XGBoost model with complete historical technical indicators"""
         predictions = []
         
-        if not self.model or len(data) < 20:
+        if not self.model or not hasattr(self.model, 'xgb_model') or len(data) < 20:
             return predictions
         
-        for i in range(10, len(data)):
+        for i in range(30, len(data)):
             try:
-                current_price = data[i-1]['close']
+                # Get historical data UP TO this point only (no future data)
+                hist_prices = np.array([d['close'] for d in data[max(0, i-30):i]])
+                hist_highs = np.array([d['high'] for d in data[max(0, i-30):i]])
+                hist_lows = np.array([d['low'] for d in data[max(0, i-30):i]])
+                hist_volumes = np.array([d['volume'] for d in data[max(0, i-30):i]])
                 
-                # Use real ML model for prediction
-                ml_prediction = await self.model.predict(symbol)
+                if len(hist_prices) < 20:
+                    continue
+                
+                current_price = hist_prices[-1]
+                
+                # Calculate ALL technical indicators from real historical data
+                # 1. Returns (log returns)
+                log_returns = np.diff(np.log(hist_prices))
+                return_lag_1 = log_returns[-1] if len(log_returns) >= 1 else 0
+                return_lag_3 = log_returns[-3] if len(log_returns) >= 3 else 0
+                return_lag_5 = log_returns[-5] if len(log_returns) >= 5 else 0
+                
+                # 2. Volatility (rolling std of returns)
+                volatility = np.std(log_returns[-20:]) if len(log_returns) >= 20 else np.std(log_returns)
+                
+                # 3. RSI (14-period)
+                deltas = np.diff(hist_prices)
+                gains = np.where(deltas > 0, deltas, 0)
+                losses = np.where(deltas < 0, -deltas, 0)
+                avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains) if len(gains) > 0 else 0.01
+                avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses) if len(losses) > 0 else 0.01
+                rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 50
+                
+                # 4. Moving Averages
+                sma_5 = np.mean(hist_prices[-5:]) if len(hist_prices) >= 5 else current_price
+                sma_10 = np.mean(hist_prices[-10:]) if len(hist_prices) >= 10 else current_price
+                sma_20 = np.mean(hist_prices[-20:]) if len(hist_prices) >= 20 else current_price
+                
+                # 5. Price Momentum
+                price_momentum = np.mean(log_returns[-5:]) if len(log_returns) >= 5 else 0
+                
+                # 6. Bollinger Bands
+                bb_middle = sma_20
+                bb_std = np.std(hist_prices[-20:]) if len(hist_prices) >= 20 else volatility * current_price
+                bb_upper = bb_middle + (2 * bb_std)
+                bb_lower = bb_middle - (2 * bb_std)
+                bb_width = (bb_upper - bb_lower) / bb_middle if bb_middle > 0 else 0
+                
+                # 7. High/Low indicators
+                high_20 = np.max(hist_highs[-20:]) if len(hist_highs) >= 20 else current_price
+                low_20 = np.min(hist_lows[-20:]) if len(hist_lows) >= 20 else current_price
+                
+                # 8. Volume indicators
+                avg_volume = np.mean(hist_volumes[-20:]) if len(hist_volumes) >= 20 else hist_volumes[-1] if len(hist_volumes) > 0 else 0
+                
+                # Build complete feature vector matching model's expected features
+                features = np.zeros(len(self.model.model_features))
+                for idx, feature_name in enumerate(self.model.model_features):
+                    if 'Return_Lag_1' in feature_name:
+                        features[idx] = return_lag_1
+                    elif 'Return_Lag_3' in feature_name:
+                        features[idx] = return_lag_3
+                    elif 'Return_Lag_5' in feature_name:
+                        features[idx] = return_lag_5
+                    elif 'Log_Return' in feature_name:
+                        features[idx] = return_lag_1
+                    elif 'Volatility' in feature_name:
+                        features[idx] = volatility
+                    elif 'RSI' in feature_name:
+                        features[idx] = rsi / 100.0  # Normalize to 0-1
+                    elif 'Price_Momentum' in feature_name:
+                        features[idx] = price_momentum
+                    elif 'BB_Width' in feature_name:
+                        features[idx] = bb_width
+                    elif 'High' in feature_name:
+                        features[idx] = high_20
+                    elif 'Low' in feature_name:
+                        features[idx] = low_20
+                    elif 'Close_Lag_1' in feature_name:
+                        features[idx] = hist_prices[-2] if len(hist_prices) >= 2 else current_price
+                    elif 'SMA_5' in feature_name:
+                        features[idx] = sma_5
+                    elif 'SMA_10' in feature_name:
+                        features[idx] = sma_10
+                    elif 'SMA_20' in feature_name:
+                        features[idx] = sma_20
+                    elif 'Volume' in feature_name:
+                        features[idx] = avg_volume
+                    elif 'VIX' in feature_name or 'SPY' in feature_name:
+                        features[idx] = volatility * 100  # Market proxy
+                    else:
+                        features[idx] = current_price
+                
+                # Get real ML prediction using XGBoost
+                xgb_prediction = self.model.xgb_model.predict(features.reshape(1, -1))[0]
+                predicted_price = current_price * (1 + xgb_prediction)
+                
+                # Determine direction and confidence based on prediction strength
+                if xgb_prediction > 0.01:
+                    forecast_direction = 'UP'
+                elif xgb_prediction < -0.01:
+                    forecast_direction = 'DOWN'
+                else:
+                    forecast_direction = 'HOLD'
+                
+                # Confidence based on volatility and prediction strength
+                prediction_strength = abs(xgb_prediction) * 200
+                confidence = max(50, min(95, int(75 + prediction_strength - volatility * 100)))
                 
                 predictions.append({
                     'timestamp': data[i]['timestamp'],
                     'actual_price': current_price,
-                    'predicted_price': ml_prediction.get('predicted_price', current_price),
-                    'forecast_direction': ml_prediction.get('forecast_direction', 'HOLD'),
-                    'confidence': ml_prediction.get('confidence', 75),
-                    'trend_score': 0,
-                    'rsi': 0,
-                    'volatility': 0
+                    'predicted_price': predicted_price,
+                    'forecast_direction': forecast_direction,
+                    'confidence': confidence,
+                    'trend_score': int(xgb_prediction * 100),
+                    'rsi': rsi,
+                    'volatility': volatility
                 })
                 
             except Exception as e:
