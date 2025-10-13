@@ -141,20 +141,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Mobile Trading AI", lifespan=lifespan)
 
-# Add security middleware
-app.add_middleware(
-    TrustedHostMiddleware, 
-    allowed_hosts=["localhost", "127.0.0.1", "0.0.0.0", "*"]
-)
-
-# Add CORS middleware
+# Add CORS middleware FIRST (order matters!)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,  # Set to False when using allow_origins=["*"]
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"]
+    expose_headers=["*"],
+    max_age=3600
+)
+
+# Add security middleware AFTER CORS
+app.add_middleware(
+    TrustedHostMiddleware, 
+    allowed_hosts=["*"]
 )
 
 # Setup API routes with model and database
