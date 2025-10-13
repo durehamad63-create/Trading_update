@@ -816,7 +816,7 @@
                 ws.close();
             }
 
-            const wsUrl = `wss://lavish-peace-production.up.railway.app/ws/asset/${symbol}/forecast?timeframe=${timeframe}`;
+            const wsUrl = `wss://lavish-peace-production.up.railway.app/ws/chart/${symbol}?timeframe=${timeframe}`;
             log('Connecting WebSocket', wsUrl);
             ws = new WebSocket(wsUrl);
             
@@ -828,12 +828,21 @@
                 const data = JSON.parse(event.data);
                 log('WebSocket message', { type: data.type, symbol });
                 
-                if (data.type === 'historical_data' && data.chart) {
-                    renderChart(data.chart);
-                } else if (data.type === 'realtime_update') {
+                if (data.type === 'chart_update' && data.chart) {
                     document.getElementById('chartPrice').textContent = formatPrice(data.current_price, symbol);
-                    document.getElementById('predictedPrice').textContent = formatPrice(data.predicted_price, symbol);
-                    document.getElementById('lastUpdated').textContent = new Date().toLocaleString();
+                    document.getElementById('detailChange').innerHTML = `
+                        ${data.change_24h >= 0 ? '↑' : '↓'} ${Math.abs(data.change_24h).toFixed(2)}%
+                    `;
+                    document.getElementById('detailChange').className = `detail-change ${data.change_24h >= 0 ? 'up' : 'down'}`;
+                    document.getElementById('forecastDirection').innerHTML = 
+                        `${data.forecast_direction === 'UP' ? '↑' : data.forecast_direction === 'DOWN' ? '↓' : '→'} ${data.forecast_direction}`;
+                    document.getElementById('forecastDirection').className = 
+                        `info-value ${data.forecast_direction === 'UP' ? 'up' : data.forecast_direction === 'DOWN' ? 'down' : ''}`;
+                    document.getElementById('confidenceScore').textContent = `${data.confidence}%`;
+                    document.getElementById('predictedPrice').textContent = data.predicted_range || formatPrice(data.current_price, symbol);
+                    document.getElementById('lastUpdated').textContent = new Date(data.last_updated).toLocaleString();
+                    
+                    renderChartFromWebSocket(data.chart);
                 }
             };
 
@@ -845,6 +854,74 @@
                 log('WebSocket error', error);
                 console.error('WebSocket error:', error);
             };
+        }
+
+        function renderChartFromWebSocket(chartData) {
+            const ctx = document.getElementById('priceChart').getContext('2d');
+            
+            if (chart) chart.destroy();
+
+            const pastData = chartData.past || [];
+            const futureData = chartData.future || [];
+            const timestamps = chartData.timestamps || [];
+            
+            const labels = timestamps.map(t => {
+                const date = new Date(t);
+                return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            });
+
+            chart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: 'Past',
+                            data: [...pastData, ...Array(futureData.length).fill(null)],
+                            borderColor: '#627eea',
+                            backgroundColor: 'rgba(98, 126, 234, 0.1)',
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 0
+                        },
+                        {
+                            label: 'Future',
+                            data: [...Array(pastData.length).fill(null), ...futureData],
+                            borderColor: '#00d4aa',
+                            backgroundColor: 'rgba(0, 212, 170, 0.1)',
+                            tension: 0.4,
+                            fill: true,
+                            pointRadius: 0,
+                            borderDash: [5, 5]
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: '#252d3d',
+                            titleColor: '#fff',
+                            bodyColor: '#8a8f98',
+                            borderColor: '#00d4aa',
+                            borderWidth: 1
+                        }
+                    },
+                    scales: {
+                        x: { display: false },
+                        y: { display: false }
+                    },
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    }
+                }
+            });
         }
 
         function refreshChart() {

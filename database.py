@@ -3,7 +3,7 @@ Database models and operations for trading forecasts
 """
 import asyncpg
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import logging
 import os
@@ -215,6 +215,10 @@ class TradingDatabase:
         if data_validator.is_synthetic_data(price_data):
             logging.error(f"Synthetic data detected and rejected for {db_key}")
             return
+        
+        # Round timestamp based on timeframe to prevent duplicates
+        timestamp = price_data.get('timestamp', datetime.now())
+        rounded_timestamp = self._round_timestamp_for_timeframe(timestamp, timeframe)
             
         async with self.pool.acquire() as conn:
             try:
@@ -232,11 +236,33 @@ class TradingDatabase:
                     price_data.get('open_price'), price_data.get('high'), 
                     price_data.get('low'), price_data.get('close_price'),
                     price_data['current_price'], price_data.get('change_24h'), 
-                    price_data.get('volume'), price_data.get('timestamp', datetime.now()))
+                    price_data.get('volume'), rounded_timestamp)
             except Exception as e:
                 # Silently handle duplicates for high-frequency data
                 if "duplicate key" not in str(e).lower():
                     pass
+    
+    def _round_timestamp_for_timeframe(self, timestamp, timeframe):
+        """Round timestamp to timeframe boundary to prevent duplicate entries"""
+        if timeframe == '1m':
+            return timestamp.replace(second=0, microsecond=0)
+        elif timeframe == '5m':
+            return timestamp.replace(minute=(timestamp.minute // 5) * 5, second=0, microsecond=0)
+        elif timeframe == '15m':
+            return timestamp.replace(minute=(timestamp.minute // 15) * 15, second=0, microsecond=0)
+        elif timeframe == '30m':
+            return timestamp.replace(minute=(timestamp.minute // 30) * 30, second=0, microsecond=0)
+        elif timeframe == '1h':
+            return timestamp.replace(minute=0, second=0, microsecond=0)
+        elif timeframe == '4H':
+            return timestamp.replace(hour=(timestamp.hour // 4) * 4, minute=0, second=0, microsecond=0)
+        elif timeframe == '1D':
+            return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif timeframe == '1W':
+            days_since_monday = timestamp.weekday()
+            return (timestamp - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
     
     async def get_last_stored_time(self, symbol, timeframe='1D'):
         """Get last stored timestamp for a symbol with centralized format"""
