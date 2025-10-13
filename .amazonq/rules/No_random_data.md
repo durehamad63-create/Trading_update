@@ -1,0 +1,1 @@
+1. **No synthetic or random data** in training, validation, test, or production datasets by default

@@ -168,59 +168,78 @@ class MobileMLModel:
             try:
                 change_24h = await asyncio.wait_for(self._get_real_change(symbol), timeout=1.0)
                 data_source = 'ML Analysis'
-            except (asyncio.TimeoutError, Exception):
-                change_24h = np.random.uniform(-3, 3)
-                data_source = 'ML Analysis'
+            except (asyncio.TimeoutError, Exception) as e:
+                raise Exception(f"Failed to get 24h change for {symbol}: {e}")
             
-            # Skip expensive historical data fetch for cached predictions
-            if symbol in self.prediction_cache:
-                cache_time, cached_result = self.prediction_cache[symbol]
-                if current_time - cache_time < self.cache_ttl:
-                    return cached_result
+            # Get real historical prices for feature engineering
+            real_prices = self._get_real_historical_prices(symbol)
+            if not real_prices or len(real_prices) < 10:
+                raise Exception(f"Insufficient historical price data for {symbol}: need at least 10 points, got {len(real_prices) if real_prices else 0}")
             
-            # Use minimal historical data for speed
-            real_prices = [current_price] * 10  # Use current price as baseline
+            # Ensure current price is the latest
+            real_prices.append(current_price)
+            real_prices = real_prices[-30:]  # Keep last 30 days
             
-            # Create feature vector using current price and market conditions
+            # Create feature vector using real market data
             features = np.zeros(len(self.model_features))
             
-            # Calculate realistic returns based on current price variations
-            price_change = np.random.normal(0, 0.015)  # 1.5% daily volatility
-            log_return = np.log((current_price * (1 + price_change)) / current_price)
+            # Calculate real returns from historical prices
+            if len(real_prices) >= 2:
+                log_return = np.log(real_prices[-1] / real_prices[-2])
+            else:
+                log_return = 0.0
             
-            # Fill features with market-based values
+            # Calculate real technical indicators from historical data
+            returns = np.diff(np.log(real_prices)) if len(real_prices) >= 2 else [0]
+            volatility = np.std(returns) if len(returns) >= 2 else 0.015
+            
+            # Calculate RSI from real price movements
+            def calculate_rsi(prices, period=14):
+                if len(prices) < period + 1:
+                    return 50.0
+                deltas = np.diff(prices)
+                gains = np.where(deltas > 0, deltas, 0)
+                losses = np.where(deltas < 0, -deltas, 0)
+                avg_gain = np.mean(gains[-period:])
+                avg_loss = np.mean(losses[-period:])
+                if avg_loss == 0:
+                    return 100.0
+                rs = avg_gain / avg_loss
+                return 100 - (100 / (1 + rs))
+            
+            rsi = calculate_rsi(real_prices)
+            
+            # Fill features with real market-based values
             feature_idx = 0
             for feature_name in self.model_features:
                 if feature_idx >= len(features):
                     break
                     
                 if 'Return_Lag_1' in feature_name:
-                    features[feature_idx] = log_return
+                    features[feature_idx] = returns[-1] if len(returns) >= 1 else 0
+                elif 'Return_Lag_3' in feature_name:
+                    features[feature_idx] = returns[-3] if len(returns) >= 3 else 0
+                elif 'Return_Lag_5' in feature_name:
+                    features[feature_idx] = returns[-5] if len(returns) >= 5 else 0
                 elif 'Log_Return' in feature_name:
                     features[feature_idx] = log_return
-                elif 'Return_Lag_3' in feature_name:
-                    features[feature_idx] = log_return * 0.8
-                elif 'Return_Lag_5' in feature_name:
-                    features[feature_idx] = log_return * 0.6
                 elif 'Volatility' in feature_name:
-                    features[feature_idx] = abs(log_return) * np.random.uniform(2, 4)
+                    features[feature_idx] = volatility
                 elif 'RSI' in feature_name:
-                    rsi_base = 50 + (price_change * 1000)
-                    features[feature_idx] = np.clip(rsi_base, 20, 80)
+                    features[feature_idx] = rsi
                 elif 'Price_Momentum' in feature_name:
-                    features[feature_idx] = price_change * np.random.uniform(0.5, 1.5)
+                    features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
                 elif feature_name == 'High':
-                    features[feature_idx] = current_price * (1 + abs(price_change))
+                    features[feature_idx] = np.max(real_prices[-5:]) if len(real_prices) >= 5 else current_price
                 elif 'Close_Lag_1' in feature_name:
-                    features[feature_idx] = current_price * (1 - price_change)
+                    features[feature_idx] = real_prices[-2] if len(real_prices) >= 2 else current_price
                 elif 'BB_Width' in feature_name:
-                    features[feature_idx] = abs(log_return) * 2
+                    features[feature_idx] = volatility * 2
                 elif 'VIX' in feature_name:
-                    features[feature_idx] = abs(price_change) * 500
+                    features[feature_idx] = volatility * 100
                 elif 'SPY' in feature_name:
-                    features[feature_idx] = price_change * 0.7
+                    features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
                 else:
-                    # Use real price data for other features
                     if feature_idx == 0:
                         features[feature_idx] = current_price
                     elif feature_idx == 1:
@@ -230,29 +249,20 @@ class MobileMLModel:
                     elif feature_idx == 3:
                         features[feature_idx] = np.mean(real_prices[-10:]) if len(real_prices) >= 10 else current_price
                     elif feature_idx == 4:
-                        features[feature_idx] = np.std(real_prices[-10:]) if len(real_prices) >= 10 else abs(change_24h)
+                        features[feature_idx] = volatility
                     else:
-                        idx = feature_idx - 4
-                        features[feature_idx] = real_prices[-idx] if idx <= len(real_prices) else current_price
+                        idx = min(feature_idx - 4, len(real_prices) - 1)
+                        features[feature_idx] = real_prices[-idx-1] if idx >= 0 else current_price
                 
                 feature_idx += 1
             
             # Real ML prediction
             xgb_prediction = self.xgb_model.predict(features.reshape(1, -1))[0]
-            
-            # Add time-based variation to prevent static predictions
-            import time
-            time_seed = int(time.time()) % 1000
-            np.random.seed(time_seed)  # Change seed based on time
-            market_noise = np.random.normal(0, 0.015)  # Increased noise for 1D
-            xgb_prediction += market_noise
-            
             predicted_price = current_price * (1 + xgb_prediction)
             
             # Dynamic confidence based on multiple factors
             volatility_factor = abs(change_24h) * 0.5
             prediction_strength = abs(xgb_prediction) * 200
-            market_stability = min(10, abs(change_24h)) * 2
             
             # Base confidence varies by symbol type
             if symbol in ['BTC', 'ETH']:
@@ -262,7 +272,8 @@ class MobileMLModel:
             else:
                 base_confidence = 70
             
-            confidence = base_confidence + prediction_strength - volatility_factor + np.random.uniform(-5, 5)
+            # Confidence based on real volatility (lower volatility = higher confidence)
+            confidence = base_confidence + prediction_strength - volatility_factor - (volatility * 100)
             confidence = min(95, max(50, confidence))
             
             # logging.info(f"🔥 REAL DATA: {symbol} price=${current_price} from API, ML prediction={xgb_prediction:.4f}")
@@ -308,27 +319,18 @@ class MobileMLModel:
             now = datetime.now()
             time_diff_hours = (timestamp - now).total_seconds() / 3600
             
-            # Apply time-based prediction model
-            # Use trend and volatility to predict price at timestamp
+            # Apply time-based prediction model using real trend
             trend_factor = current_pred['change_24h'] / 100
-            volatility = abs(trend_factor) * 0.1
-            
-            # Time decay factor for prediction accuracy
             time_decay = max(0.1, 1 - abs(time_diff_hours) * 0.02)
             
-            # Generate prediction with some realistic variation
-            import random
-            random.seed(int(timestamp.timestamp()))  # Deterministic based on timestamp
-            noise = (random.random() - 0.5) * volatility * time_decay
+            # Deterministic prediction based on trend only
+            predicted_price = current_price * (1 + trend_factor * time_decay)
             
-            predicted_price = current_price * (1 + trend_factor * time_decay + noise)
-            
-            return max(0.01, predicted_price)  # Ensure positive price
+            return max(0.01, predicted_price)
             
         except Exception as e:
-            pass
-            # Fallback to current price
-            return self.predict(symbol)['current_price']
+            logging.error(f"Timestamp prediction failed for {symbol}: {e}")
+            raise
     
     async def get_historical_predictions(self, symbol, num_points=50):
         """Get historical predictions from database"""
@@ -425,8 +427,8 @@ class MobileMLModel:
                 if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
                     if symbol in macro_realtime_service.price_cache:
                         return macro_realtime_service.price_cache[symbol]['change_24h']
-                # Macro indicators have minimal daily changes
-                return np.random.uniform(-0.1, 0.1)
+                # Return 0 if no real data available
+                return 0.0
             
             # Stablecoins have no change
             if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('fixed_price'):
@@ -487,9 +489,7 @@ class MobileMLModel:
                 return []
                     
         except Exception as e:
-            pass
-            # Return fallback data instead of raising exception
-            return [100.0] * 10  # Simple fallback
+            raise Exception(f"Failed to get real historical prices for {symbol}: {e}")
     
     def _enhanced_technical_forecast(self, current_price, change_24h, symbol):
         """Enhanced technical analysis for better predictions"""

@@ -59,27 +59,47 @@ class RealTimeWebSocketService:
         # Add fallback data fetcher for failed WebSocket connections (delayed)
         asyncio.create_task(self._delayed_fallback_fetcher())
     async def _populate_initial_cache(self):
-        """Populate cache with initial data for all crypto symbols"""
+        """Populate cache with REAL data from Binance REST API for all crypto symbols"""
         try:
-            # Initial prices for immediate API availability
-            initial_prices = {
-                'BTC': 43250.50, 'ETH': 2650.75, 'BNB': 315.20, 'XRP': 0.52, 'SOL': 98.45,
-                'DOGE': 0.085, 'ADA': 0.48, 'TRX': 0.105, 'USDT': 1.0, 'USDC': 1.0
-            }
+            print("🔄 Fetching real initial prices from Binance API...")
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                for symbol, binance_symbol in self.binance_symbols.items():
+                    try:
+                        # Handle stablecoins with fixed price
+                        if symbol in ['USDT', 'USDC']:
+                            self.price_cache[symbol] = {
+                                'current_price': 1.0,
+                                'change_24h': 0.0,
+                                'volume': 1000000000,
+                                'timestamp': datetime.now()
+                            }
+                            continue
+                        
+                        # Get real data from Binance REST API
+                        url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={binance_symbol.upper()}"
+                        async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                            if response.status == 200:
+                                data = await response.json()
+                                price_data = {
+                                    'current_price': float(data['lastPrice']),
+                                    'change_24h': float(data['priceChangePercent']),
+                                    'volume': float(data['volume']),
+                                    'timestamp': datetime.now()
+                                }
+                                self.price_cache[symbol] = price_data
+                                
+                                # Cache using centralized manager
+                                cache_key = self.cache_keys.price(symbol, 'crypto')
+                                self.cache_manager.set_cache(cache_key, price_data, ttl=30)
+                                print(f"✅ {symbol}: ${price_data['current_price']:.2f}")
+                            else:
+                                print(f"⚠️ {symbol}: Binance API returned status {response.status}")
+                    except Exception as e:
+                        print(f"❌ Failed to fetch initial price for {symbol}: {e}")
+                        # Do not populate cache with fallback data - let WebSocket handle it
             
-            for symbol, price in initial_prices.items():
-                self.price_cache[symbol] = {
-                    'current_price': price,
-                    'change_24h': 0.5 if symbol not in ['USDT', 'USDC'] else 0.0,
-                    'volume': 1000000000 if symbol in ['USDT', 'USDC'] else 500000000,
-                    'timestamp': datetime.now()
-                }
-
-                
-                # Cache using centralized manager
-                cache_key = self.cache_keys.price(symbol, 'crypto')
-                self.cache_manager.set_cache(cache_key, self.price_cache[symbol], ttl=30)
-            
+            print(f"✅ Initial cache populated with {len(self.price_cache)} real prices")
         except Exception as e:
             print(f"❌ Initial cache population failed: {e}")
     
@@ -111,11 +131,11 @@ class RealTimeWebSocketService:
         
         while True:
             try:
-                # Railway-compatible WebSocket settings
+                # Railway-compatible WebSocket settings with longer timeouts
                 async with websockets.connect(
                     uri, 
-                    ping_interval=20,
-                    ping_timeout=10,
+                    ping_interval=30,
+                    ping_timeout=20,
                     close_timeout=10,
                     max_size=2**20,
                     compression=None
@@ -564,40 +584,17 @@ class RealTimeWebSocketService:
                     print(f"❌ TREND API: Query {attempt+1} failed for {query_symbol}: {e}")
                     continue
             
-            # If no database data, generate from current price
+            # If no database data, return error - DO NOT generate synthetic data
             if not actual_data or not forecast_data:
-                print(f"⚠️ No DB data for {symbol}, generating from current price")
-                try:
-                    current_data = await multi_asset.get_asset_data(symbol)
-                    current_price = current_data['current_price']
-                    
-                    import numpy as np
-                    actual_data = []
-                    forecast_data = []
-                    timestamps = []
-                    
-                    for i in range(50):
-                        variation = np.random.normal(0, 0.02)
-                        price = current_price * (1 + variation * (50-i)/50)
-                        actual_data.append(price)
-                        forecast_data.append(price * (1 + np.random.normal(0, 0.01)))
-                        
-                        timestamp = datetime.now() - timedelta(hours=i)
-                        timestamps.append(timestamp.isoformat())
-                    
-                    actual_data.reverse()
-                    forecast_data.reverse()
-                    timestamps.reverse()
-                    
-                except Exception as e:
-                    print(f"❌ Failed to generate data for {symbol}: {e}")
-                    error_data = {
-                        "type": "error",
-                        "symbol": symbol,
-                        "message": "Historical data unavailable"
-                    }
-                    await websocket.send_text(json.dumps(error_data))
-                    return
+                print(f"❌ No historical data available for {symbol} {timeframe}")
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "message": f"No historical data available for {symbol}. Please wait for data collection to complete."
+                }
+                await websocket.send_text(json.dumps(error_data))
+                return
             
             historical_message = {
                 "type": "historical_data",
@@ -662,7 +659,8 @@ class RealTimeWebSocketService:
                     'timestamp': adjusted_time
                 }
                 
-                # Store price data
+                # Store price data with source identifier
+                price_data['data_source'] = 'binance'
                 await self._store_realtime_data(timeframe_symbol, price_data, timeframe)
                 
         except Exception as e:

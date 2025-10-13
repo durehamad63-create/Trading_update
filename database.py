@@ -181,8 +181,14 @@ class TradingDatabase:
                 pass  # Index already exists
     
     async def store_forecast(self, symbol, forecast_data, timeframe='1D'):
-        """Store forecast prediction with centralized symbol format"""
+        """Store forecast prediction with centralized symbol format - VALIDATES REAL DATA ONLY"""
         if not self.pool:
+            return None
+        
+        # Validate forecast data before storing
+        from utils.data_validator import data_validator
+        if not data_validator.validate_forecast_data(forecast_data):
+            logging.warning(f"Invalid forecast data rejected for {symbol}")
             return None
         
         # Use centralized symbol manager for consistent database keys
@@ -199,8 +205,19 @@ class TradingDatabase:
                 forecast_data.get('trend_score'))
     
     async def store_actual_price(self, symbol, price_data, timeframe='1D'):
-        """Store actual market price with OHLC data and duplicate handling"""
+        """Store actual market price with OHLC data and duplicate handling - VALIDATES REAL DATA ONLY"""
         if not self.pool:
+            return
+        
+        # Validate data before storing
+        from utils.data_validator import data_validator
+        source = price_data.get('data_source', 'api')
+        if not data_validator.validate_price_data(price_data, source):
+            logging.warning(f"Invalid price data rejected for {symbol}")
+            return
+        
+        if data_validator.is_synthetic_data(price_data):
+            logging.error(f"Synthetic data detected and rejected for {symbol}")
             return
         
         # Use centralized symbol manager for consistent database keys
@@ -245,8 +262,15 @@ class TradingDatabase:
             return result
     
     async def store_historical_batch(self, symbol, historical_data, timeframe='1D'):
-        """Store batch of historical data with OHLC using centralized symbol format"""
+        """Store batch of historical data with OHLC using centralized symbol format - VALIDATES REAL DATA ONLY"""
         if not self.pool or not historical_data:
+            return
+        
+        # Validate historical data before storing
+        from utils.data_validator import data_validator
+        source = historical_data[0].get('data_source', 'api') if historical_data else 'api'
+        if not data_validator.validate_historical_data(historical_data, source):
+            logging.warning(f"Invalid historical data rejected for {symbol}")
             return
         
         # Use centralized symbol manager for consistent database keys
@@ -292,20 +316,7 @@ class TradingDatabase:
                 ORDER BY f.created_at DESC
             """ % days, db_symbol)
             
-            # If no data from database, return sample data
-            if not rows:
-                from datetime import datetime, timedelta
-                sample_data = []
-                for i in range(5):
-                    date = datetime.now() - timedelta(days=i+1)
-                    sample_data.append({
-                        'created_at': date,
-                        'forecast_direction': 'UP' if i % 2 == 0 else 'DOWN',
-                        'actual_direction': 'UP' if (i + 1) % 2 == 0 else 'DOWN', 
-                        'result': 'Hit' if i % 3 != 0 else 'Miss'
-                    })
-                return sample_data
-            
+            # Return empty list if no data - NO SYNTHETIC DATA
             return [dict(row) for row in rows]
     
     async def calculate_accuracy(self, symbol, days=30, timeframe='1D'):
@@ -407,7 +418,7 @@ class TradingDatabase:
             return chart_data
     
     async def export_csv_data(self, symbol, timeframe='1M'):
-        """Export historical data for CSV with sample data if no accuracy data exists"""
+        """Export historical data for CSV - returns only real data"""
         if not self.pool:
             return []
             
@@ -433,36 +444,14 @@ class TradingDatabase:
                 LIMIT 100
             """ % days, db_symbol)
             
-            # If no data or all N/A, generate sample data
-            if not rows or all(row['actual'] is None for row in rows):
-                import random
-                from datetime import datetime, timedelta
-                
-                sample_data = []
-                for i in range(min(30, days)):
-                    date = datetime.now() - timedelta(days=i)
-                    forecast = random.choice(['UP', 'DOWN', 'HOLD'])
-                    actual = random.choice(['UP', 'DOWN', 'HOLD'])
-                    result = 'Hit' if forecast == actual else 'Miss'
-                    
-                    sample_data.append({
-                        'date': date.date(),
-                        'forecast': forecast,
-                        'actual': actual,
-                        'result': result
-                    })
-                
-                return sample_data
-            
-            # Fill N/A values with sample data
+            # Return only real data - NO SYNTHETIC DATA
+            # Filter out rows with missing actual data
             result_data = []
             for row in rows:
                 row_dict = dict(row)
-                if row_dict['actual'] is None:
-                    import random
-                    row_dict['actual'] = random.choice(['UP', 'DOWN', 'HOLD'])
-                    row_dict['result'] = 'Hit' if row_dict['forecast'] == row_dict['actual'] else 'Miss'
-                result_data.append(row_dict)
+                # Only include rows with complete real data
+                if row_dict['actual'] is not None and row_dict['result'] is not None:
+                    result_data.append(row_dict)
             
             return result_data
     

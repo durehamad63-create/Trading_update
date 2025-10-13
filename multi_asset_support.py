@@ -113,19 +113,14 @@ class MultiAssetSupport:
             raise Exception(f"Unsupported symbol: {symbol}")
     
     async def _get_crypto_historical(self, symbol, periods):
-        """Get crypto historical data from Binance with rate limiting - ASYNC"""
-        symbol_map = {
-            'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
-            'XRP': 'XRPUSDT', 'SOL': 'SOLUSDT', 'DOGE': 'DOGEUSDT',
-            'ADA': 'ADAUSDT', 'TRX': 'TRXUSDT', 'USDT': 'USDTUSDC',
-            'USDC': 'USDCUSDT'
-        }
-        
-        binance_symbol = symbol_map.get(symbol)
-        if not binance_symbol:
+        """Get crypto historical data from Binance - ASYNC"""
+        if symbol not in CRYPTO_SYMBOLS:
             raise Exception(f"Crypto symbol not supported: {symbol}")
         
-        await rate_limiter.wait_if_needed('binance')
+        config = CRYPTO_SYMBOLS[symbol]
+        binance_symbol = config.get('binance')
+        if not binance_symbol:
+            raise Exception(f"No Binance mapping for {symbol}")
         
         import aiohttp
         binance_url = os.getenv('BINANCE_API_URL', 'https://api.binance.com/api/v3')
@@ -134,20 +129,15 @@ class MultiAssetSupport:
         async with aiohttp.ClientSession() as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as response:
                 if response.status == 200:
-                    rate_limiter.reset_backoff('binance')
                     data = await response.json()
                     prices = [float(kline[4]) for kline in data]  # Close price
                     volumes = [float(kline[5]) for kline in data]  # Volume
                     return np.array(prices), np.array(volumes)
-                elif response.status in [418, 429]:
-                    rate_limiter.handle_rate_limit_error('binance', response.status)
-                    raise Exception(f"API error: {response.status}")
                 else:
                     raise Exception(f"Binance API failed: {response.status}")
     
     async def _get_stock_historical(self, symbol, periods):
-        """Get stock historical data using direct Yahoo Finance API with rate limiting - ASYNC"""
-        await rate_limiter.wait_if_needed('yahoo')
+        """Get stock historical data using direct Yahoo Finance API - ASYNC"""
         
         try:
             import aiohttp
@@ -158,7 +148,6 @@ class MultiAssetSupport:
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=15), headers=headers) as response:
                     if response.status == 200:
-                        rate_limiter.reset_backoff('yahoo')
                         data = await response.json()
                         result = data['chart']['result'][0]
                         
@@ -177,9 +166,6 @@ class MultiAssetSupport:
                         vols = np.array(volumes[-periods:] if len(volumes) >= len(prices) else [1000000] * len(prices))
                         
                         return prices, vols
-                    elif response.status in [418, 429]:
-                        rate_limiter.handle_rate_limit_error('yahoo', response.status)
-                        raise Exception(f"API error: {response.status}")
                     else:
                         raise Exception(f"Yahoo API failed: {response.status}")
                 
@@ -187,40 +173,44 @@ class MultiAssetSupport:
             raise Exception(f"Stock historical data failed for {symbol}: {str(e)}")
     
     def _get_macro_historical(self, symbol, periods):
-        """Generate realistic macro historical data"""
-        # Base values for macro indicators
-        base_values = {
-            'GDP': 27000,  # US GDP in billions
-            'CPI': 310,    # Consumer Price Index
-            'UNEMPLOYMENT': 3.7,  # Unemployment rate %
-            'FED_RATE': 5.25,     # Federal funds rate %
-            'CONSUMER_CONFIDENCE': 102  # Consumer confidence index
-        }
-        
-        base_value = base_values.get(symbol, 100)
-        
-        # Generate realistic trend data
-        prices = []
-        current_value = base_value
-        
-        for i in range(periods):
-            # Add realistic volatility based on indicator type
-            if symbol == 'GDP':
-                change = np.random.normal(0, 0.001)  # GDP grows slowly
-            elif symbol == 'CPI':
-                change = np.random.normal(0.0002, 0.001)  # Inflation trend
-            elif symbol == 'UNEMPLOYMENT':
-                change = np.random.normal(0, 0.01)  # Unemployment volatility
-            elif symbol == 'FED_RATE':
-                change = np.random.normal(0, 0.005)  # Interest rate changes
-            else:  # CONSUMER_CONFIDENCE
-                change = np.random.normal(0, 0.02)  # Confidence volatility
+        """Get real macro economic data from FRED API"""
+        try:
+            from fredapi import Fred
+            fred_api_key = os.getenv('FRED_API_KEY')
             
-            current_value *= (1 + change)
-            prices.append(current_value)
-        
-        volumes = np.array(prices) * 0.1  # Simulated volume
-        return np.array(prices), volumes
+            if not fred_api_key:
+                raise Exception("FRED_API_KEY not configured")
+            
+            fred = Fred(api_key=fred_api_key)
+            
+            # FRED series IDs for each indicator
+            fred_series = {
+                'GDP': 'GDP',  # Gross Domestic Product
+                'CPI': 'CPIAUCSL',  # Consumer Price Index
+                'UNEMPLOYMENT': 'UNRATE',  # Unemployment Rate
+                'FED_RATE': 'FEDFUNDS',  # Federal Funds Rate
+                'CONSUMER_CONFIDENCE': 'UMCSENT'  # Consumer Sentiment
+            }
+            
+            series_id = fred_series.get(symbol)
+            if not series_id:
+                raise Exception(f"No FRED series for {symbol}")
+            
+            # Get real data from FRED
+            data = fred.get_series(series_id, observation_start=datetime.now() - timedelta(days=periods*30))
+            
+            if data is None or len(data) == 0:
+                raise Exception(f"No FRED data available for {symbol}")
+            
+            # Convert to numpy arrays
+            prices = np.array(data.values[-periods:])
+            volumes = np.ones(len(prices)) * 1000000  # Placeholder volume
+            
+            return prices, volumes
+            
+        except Exception as e:
+            logging.error(f"FRED API failed for {symbol}: {e}")
+            raise Exception(f"Cannot get real macro data for {symbol}: FRED API failed - {e}")
     
     def format_predicted_range(self, symbol, predicted_price):
         """Format predicted range based on asset type"""

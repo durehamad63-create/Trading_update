@@ -59,7 +59,7 @@ class MacroRealtimeService:
         while True:
             try:
                 for symbol, config in self.macro_indicators.items():
-                    # Try to get real FRED data first
+                    # Try to get real FRED data only
                     real_data = await self._fetch_fred_data(symbol)
                     
                     if real_data:
@@ -67,17 +67,9 @@ class MacroRealtimeService:
                         change_pct = real_data['change_pct']
                         print(f"📊 FRED: {symbol} = {new_value} ({change_pct:+.2f}%)")
                     else:
-                        # Fallback to simulation if FRED fails
-                        base_value = config['value']
-                        trend = config['change']
-                        volatility = config['volatility']
-                        
-                        change = np.random.normal(trend, volatility)
-                        new_value = base_value * (1 + change)
-                        change_pct = change * 100
-                        
-                        # Update base value for next iteration
-                        self.macro_indicators[symbol]['value'] = new_value
+                        # Skip if no real data available
+                        print(f"⚠️ No FRED data available for {symbol}, skipping update")
+                        continue
                     
                     # Update cache
                     cache_data = {
@@ -153,7 +145,8 @@ class MacroRealtimeService:
                     'timestamp': adjusted_time
                 }
                 
-                # Store data
+                # Store data with source identifier
+                adjusted_price_data['data_source'] = 'fred'
                 if self.database and self.database.pool:
                     await self.database.store_actual_price(timeframe_symbol, adjusted_price_data, timeframe)
                     
@@ -305,40 +298,17 @@ class MacroRealtimeService:
                     print(f"❌ Macro query {attempt+1} failed: {e}")
                     continue
             
-            # If no database data, generate from current value
+            # If no database data, return error - NO SYNTHETIC DATA
             if not actual_data or not forecast_data:
-                print(f"⚠️ No DB data for macro {symbol}, generating from current value")
-                try:
-                    current_data = multi_asset._get_macro_data(symbol)
-                    current_value = current_data['current_price']
-                    
-                    import numpy as np
-                    actual_data = []
-                    forecast_data = []
-                    timestamps = []
-                    
-                    for i in range(50):
-                        variation = np.random.normal(0, 0.005)
-                        value = current_value * (1 + variation * (50-i)/50)
-                        actual_data.append(value)
-                        forecast_data.append(value * (1 + np.random.normal(0, 0.003)))
-                        
-                        timestamp = datetime.now() - timedelta(weeks=i)
-                        timestamps.append(timestamp.isoformat())
-                    
-                    actual_data.reverse()
-                    forecast_data.reverse()
-                    timestamps.reverse()
-                    
-                except Exception as e:
-                    print(f"❌ Failed to generate macro data for {symbol}: {e}")
-                    error_data = {
-                        "type": "error",
-                        "symbol": symbol,
-                        "message": "Macro historical data unavailable"
-                    }
-                    await websocket.send_text(json.dumps(error_data))
-                    return
+                print(f"❌ No historical data available for macro {symbol} {timeframe}")
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "message": f"No historical data available for {symbol}. Please wait for FRED data collection to complete."
+                }
+                await websocket.send_text(json.dumps(error_data))
+                return
             
             # Get indicator name
             indicator_names = {

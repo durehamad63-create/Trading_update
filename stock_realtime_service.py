@@ -351,7 +351,8 @@ class StockRealtimeService:
                     'timestamp': adjusted_time
                 }
                 
-                # Store price data
+                # Store price data with source identifier
+                adjusted_price_data['data_source'] = 'yahoo'
                 if self.database and self.database.pool:
                     await self.database.store_actual_price(timeframe_symbol, adjusted_price_data, timeframe)
                     
@@ -552,40 +553,17 @@ class StockRealtimeService:
                     print(f"❌ Stock query {attempt+1} failed: {e}")
                     continue
             
-            # If no database data, generate from current price
+            # If no database data, return error - DO NOT generate synthetic data
             if not actual_data or not forecast_data:
-                print(f"⚠️ No DB data for stock {symbol}, generating from current price")
-                try:
-                    current_data = await multi_asset.get_asset_data(symbol)
-                    current_price = current_data['current_price']
-                    
-                    import numpy as np
-                    actual_data = []
-                    forecast_data = []
-                    timestamps = []
-                    
-                    for i in range(50):
-                        variation = np.random.normal(0, 0.015)
-                        price = current_price * (1 + variation * (50-i)/50)
-                        actual_data.append(price)
-                        forecast_data.append(price * (1 + np.random.normal(0, 0.008)))
-                        
-                        timestamp = datetime.now() - timedelta(hours=i)
-                        timestamps.append(timestamp.isoformat())
-                    
-                    actual_data.reverse()
-                    forecast_data.reverse()
-                    timestamps.reverse()
-                    
-                except Exception as e:
-                    print(f"❌ Failed to generate stock data for {symbol}: {e}")
-                    error_data = {
-                        "type": "error",
-                        "symbol": symbol,
-                        "message": "Stock historical data unavailable"
-                    }
-                    await websocket.send_text(json.dumps(error_data))
-                    return
+                print(f"❌ No historical data available for stock {symbol} {timeframe}")
+                error_data = {
+                    "type": "error",
+                    "symbol": symbol,
+                    "timeframe": timeframe,
+                    "message": f"No historical data available for {symbol}. Please wait for data collection to complete."
+                }
+                await websocket.send_text(json.dumps(error_data))
+                return
             
             historical_message = {
                 "type": "historical_data",  # Standardize message type

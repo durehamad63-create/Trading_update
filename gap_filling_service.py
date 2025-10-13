@@ -450,50 +450,61 @@ class GapFillingService:
         return aggregated
     
     async def _get_macro_data(self, symbol: str, timeframe: str) -> List[Dict]:
-        """Generate synthetic macro economic data with proper intervals"""
+        """Get real macro economic data from FRED API"""
         try:
-            base_values = {
-                'GDP': 27000, 'CPI': 310.5, 'UNEMPLOYMENT': 3.7,
-                'FED_RATE': 5.25, 'CONSUMER_CONFIDENCE': 102.3
+            from fredapi import Fred
+            fred_api_key = os.getenv('FRED_API_KEY')
+            
+            if not fred_api_key:
+                raise Exception("FRED_API_KEY not configured")
+            
+            fred = Fred(api_key=fred_api_key)
+            
+            # FRED series IDs
+            fred_series = {
+                'GDP': 'GDP',
+                'CPI': 'CPIAUCSL',
+                'UNEMPLOYMENT': 'UNRATE',
+                'FED_RATE': 'FEDFUNDS',
+                'CONSUMER_CONFIDENCE': 'UMCSENT'
             }
             
-            total_needed = self.max_records
-            data = []
-            base_value = base_values.get(symbol, 100)
+            series_id = fred_series.get(symbol)
+            if not series_id:
+                raise Exception(f"No FRED series for {symbol}")
             
-            # Generate data with proper time intervals
+            # Get real data from FRED
             interval = self.storage_intervals.get(timeframe, timedelta(days=1))
+            days_back = self.max_records * (interval.days if interval.days > 0 else 1)
             
-            for i in range(total_needed):
-                timestamp = datetime.now() - (interval * (total_needed - i))
-                
-                if timeframe == '1D':
-                    variation = random.uniform(-0.002, 0.002)
-                elif timeframe == '7D':
-                    variation = random.uniform(-0.008, 0.008)
-                elif timeframe == '1W':
-                    variation = random.uniform(-0.01, 0.01)
-                elif timeframe == '1M':
-                    variation = random.uniform(-0.02, 0.02)
-                else:
-                    variation = random.uniform(-0.005, 0.005)
-                
-                current_value = base_value * (1 + variation)
-                
+            fred_data = fred.get_series(
+                series_id,
+                observation_start=datetime.now() - timedelta(days=days_back)
+            )
+            
+            if fred_data is None or len(fred_data) == 0:
+                raise Exception(f"No FRED data for {symbol}")
+            
+            # Convert to required format
+            data = []
+            for timestamp, value in fred_data.items():
                 data.append({
                     'timestamp': timestamp,
-                    'open': current_value,
-                    'high': current_value * 1.001,
-                    'low': current_value * 0.999,
-                    'close': current_value,
-                    'volume': random.randint(800000, 1200000)
+                    'open': float(value),
+                    'high': float(value) * 1.001,
+                    'low': float(value) * 0.999,
+                    'close': float(value),
+                    'volume': 1000000
                 })
             
-            print(f"    ✅ {symbol} {timeframe}: Generated {len(data)} macro data points")
+            # Take last max_records
+            data = data[-self.max_records:] if len(data) > self.max_records else data
+            
+            print(f"    ✅ {symbol} {timeframe}: Got {len(data)} real FRED data points")
             return data
             
         except Exception as e:
-            print(f"    ❌ Failed to generate macro data for {symbol} {timeframe}: {e}")
+            print(f"    ❌ FRED API failed for {symbol}: {e}")
             return []
     
     async def _generate_ml_predictions(self, data: List[Dict], symbol: str, timeframe: str, asset_class: str) -> List[Dict]:
