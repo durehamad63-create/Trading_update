@@ -91,9 +91,10 @@ class MobileMLModel:
                 raise Exception(f"Cannot start: {str(e)}")
         
         # Use centralized cache manager
-        from utils.cache_manager import CacheManager, CacheKeys
+        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
+        self.cache_ttl = CacheTTL
     
     def _download_model_from_drive(self, model_path):
         """Download model from Google Drive with virus scan bypass"""
@@ -295,8 +296,8 @@ class MobileMLModel:
                 'data_source': data_source
             }
             
-            # Cache using centralized manager with hot symbol priority - SHORTER TTL for 1D
-            ttl = 1 if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else 3  # Much shorter cache
+            # Cache using centralized manager with hot symbol priority
+            ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
             self.cache_manager.set_cache(cache_key, result, ttl)
             
             # Cache the result in memory
@@ -370,81 +371,124 @@ class MobileMLModel:
             return []
     
     async def _get_real_price(self, symbol):
-        """Get real price from APIs using centralized client - ASYNC"""
+        """Get real price from cached services - FAST"""
         try:
-            # Handle macro indicators
+            # Try cached prices from realtime services first (FAST)
+            from utils.cache_manager import CacheManager, CacheKeys
+            
+            # Check crypto cache
+            if symbol in CRYPTO_SYMBOLS:
+                cache_key = CacheKeys.price(symbol, 'crypto')
+                cached = CacheManager.get_cache(cache_key)
+                if cached and 'current_price' in cached:
+                    return cached['current_price']
+                
+                # Try realtime service cache
+                try:
+                    import realtime_websocket_service as rws
+                    if rws.realtime_service and symbol in rws.realtime_service.price_cache:
+                        return rws.realtime_service.price_cache[symbol]['current_price']
+                except:
+                    pass
+                
+                # Handle stablecoins
+                if CRYPTO_SYMBOLS[symbol].get('fixed_price'):
+                    return CRYPTO_SYMBOLS[symbol]['fixed_price']
+            
+            # Check stock cache
+            if symbol in STOCK_SYMBOLS:
+                cache_key = CacheKeys.price(symbol, 'stock')
+                cached = CacheManager.get_cache(cache_key)
+                if cached and 'current_price' in cached:
+                    return cached['current_price']
+                
+                # Try stock service cache
+                try:
+                    import stock_realtime_service as stock
+                    if stock.stock_realtime_service and symbol in stock.stock_realtime_service.price_cache:
+                        return stock.stock_realtime_service.price_cache[symbol]['current_price']
+                except:
+                    pass
+            
+            # Check macro cache
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
             if symbol in macro_symbols:
-                # Get from macro service if available
-                from modules.api_routes import macro_realtime_service
-                if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
-                    if symbol in macro_realtime_service.price_cache:
-                        return macro_realtime_service.price_cache[symbol]['current_price']
+                cache_key = CacheKeys.price(symbol, 'macro')
+                cached = CacheManager.get_cache(cache_key)
+                if cached and 'current_price' in cached:
+                    return cached['current_price']
+                
+                # Try macro service cache
+                try:
+                    import macro_realtime_service as macro
+                    if macro.macro_realtime_service and symbol in macro.macro_realtime_service.price_cache:
+                        return macro.macro_realtime_service.price_cache[symbol]['current_price']
+                except:
+                    pass
                 
                 # Fallback macro values
                 macro_defaults = {
-                    'GDP': 27000.0,  # $27T
-                    'CPI': 3.2,      # 3.2%
-                    'UNEMPLOYMENT': 3.7,  # 3.7%
-                    'FED_RATE': 5.25,     # 5.25%
-                    'CONSUMER_CONFIDENCE': 102.0  # Index 102
+                    'GDP': 27000.0, 'CPI': 3.2, 'UNEMPLOYMENT': 3.7,
+                    'FED_RATE': 5.25, 'CONSUMER_CONFIDENCE': 102.0
                 }
                 return macro_defaults.get(symbol, 100.0)
             
-            # Handle stablecoins
-            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('fixed_price'):
-                return CRYPTO_SYMBOLS[symbol]['fixed_price']
-            
-            # Try Binance for crypto
-            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('binance'):
-                price = await APIClient.get_binance_price(CRYPTO_SYMBOLS[symbol]['binance'])
-                if price:
-                    return price
-            
-            # Try Yahoo for stocks or crypto fallback
-            if symbol in STOCK_SYMBOLS:
-                price = await APIClient.get_yahoo_price(STOCK_SYMBOLS[symbol]['yahoo'])
-                if price:
-                    return price
-            elif symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('yahoo'):
-                price = await APIClient.get_yahoo_price(CRYPTO_SYMBOLS[symbol]['yahoo'])
-                if price:
-                    return price
-            
-            raise Exception(f"No price data available for {symbol}")
+            raise Exception(f"No cached price for {symbol}")
         except Exception as e:
             ErrorHandler.log_prediction_error(symbol, f"Price fetch failed: {e}")
             raise
     
     async def _get_real_change(self, symbol):
-        """Get real 24h change from APIs using centralized client - ASYNC"""
+        """Get real 24h change from cached services - FAST"""
         try:
-            # Handle macro indicators
+            from utils.cache_manager import CacheManager, CacheKeys
+            
+            # Check crypto cache
+            if symbol in CRYPTO_SYMBOLS:
+                cache_key = CacheKeys.price(symbol, 'crypto')
+                cached = CacheManager.get_cache(cache_key)
+                if cached and 'change_24h' in cached:
+                    return cached['change_24h']
+                
+                # Try realtime service
+                try:
+                    import realtime_websocket_service as rws
+                    if rws.realtime_service and symbol in rws.realtime_service.price_cache:
+                        return rws.realtime_service.price_cache[symbol].get('change_24h', 0.0)
+                except:
+                    pass
+                
+                if CRYPTO_SYMBOLS[symbol].get('fixed_price'):
+                    return 0.0
+            
+            # Check stock cache
+            if symbol in STOCK_SYMBOLS:
+                cache_key = CacheKeys.price(symbol, 'stock')
+                cached = CacheManager.get_cache(cache_key)
+                if cached and 'change_24h' in cached:
+                    return cached['change_24h']
+                
+                try:
+                    import stock_realtime_service as stock
+                    if stock.stock_realtime_service and symbol in stock.stock_realtime_service.price_cache:
+                        return stock.stock_realtime_service.price_cache[symbol].get('change_24h', 0.0)
+                except:
+                    pass
+            
+            # Check macro cache
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
             if symbol in macro_symbols:
-                # Get from macro service if available
-                from modules.api_routes import macro_realtime_service
-                if macro_realtime_service and hasattr(macro_realtime_service, 'price_cache'):
-                    if symbol in macro_realtime_service.price_cache:
-                        return macro_realtime_service.price_cache[symbol]['change_24h']
-                # Return 0 if no real data available
-                return 0.0
-            
-            # Stablecoins have no change
-            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('fixed_price'):
-                return 0.0
-            
-            # Try Binance for crypto
-            if symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('binance'):
-                change = await APIClient.get_binance_change(CRYPTO_SYMBOLS[symbol]['binance'])
-                if change is not None:
-                    return change
-            
-            # Try Yahoo for stocks or crypto fallback
-            if symbol in STOCK_SYMBOLS:
-                return await APIClient.get_yahoo_change(STOCK_SYMBOLS[symbol]['yahoo'])
-            elif symbol in CRYPTO_SYMBOLS and CRYPTO_SYMBOLS[symbol].get('yahoo'):
-                return await APIClient.get_yahoo_change(CRYPTO_SYMBOLS[symbol]['yahoo'])
+                cache_key = CacheKeys.price(symbol, 'macro')
+                cached = CacheManager.get_cache(cache_key)
+                if cached and 'change_24h' in cached:
+                    return cached['change_24h']
+                
+                try:
+                    import macro_realtime_service as macro
+                    if macro.macro_realtime_service and symbol in macro.macro_realtime_service.price_cache:
+                        return macro.macro_realtime_service.price_cache[symbol].get('change_24h', 0.0)
+                except:
+                    pass
             
         except Exception as e:
             ErrorHandler.log_prediction_error(symbol, f"Change fetch failed: {e}")

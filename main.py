@@ -9,9 +9,9 @@ import sys
 import os
 from contextlib import asynccontextmanager
 
-# Minimal logging setup
-logging.basicConfig(level=logging.WARNING, format='%(levelname)s: %(message)s')
-logging.getLogger('uvicorn.access').setLevel(logging.ERROR)
+# Enable API request logging
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logging.getLogger('uvicorn.access').setLevel(logging.INFO)
 logging.getLogger('asyncio').setLevel(logging.ERROR)
 
 # Add modules to path

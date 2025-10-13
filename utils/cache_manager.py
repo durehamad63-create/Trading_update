@@ -1,13 +1,26 @@
-"""Centralized cache key management and Redis client"""
+"""Centralized cache key management with Redis + Memory fallback"""
 import os
 import redis
 import json
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
 
+class CacheTTL:
+    """Centralized TTL configuration"""
+    PRICE_CRYPTO = 30
+    PRICE_STOCK = 30
+    PRICE_MACRO = 300
+    PREDICTION_HOT = 1
+    PREDICTION_NORMAL = 3
+    CHART_DATA = 600
+    WEBSOCKET_HISTORY = 300
+
 class CacheManager:
     _redis_client = None
+    _memory_cache = {}  # Fallback memory cache
+    _cache_timestamps = {}  # Track TTL for memory cache
     
     @classmethod
     def get_redis_client(cls):
@@ -16,8 +29,6 @@ class CacheManager:
                 redis_host = os.getenv('REDIS_HOST', 'localhost')
                 redis_port = int(os.getenv('REDIS_PORT', '6379'))
                 redis_password = os.getenv('REDIS_PASSWORD')
-                
-                print(f"🔄 Connecting to Redis: {redis_host}:{redis_port}")
                 
                 cls._redis_client = redis.Redis(
                     host=redis_host,
@@ -31,30 +42,48 @@ class CacheManager:
                     health_check_interval=30
                 )
                 cls._redis_client.ping()
-                print(f"✅ Redis connected: {redis_host}:{redis_port}")
-            except Exception as e:
-                print(f"❌ Redis connection failed: {e}")
+            except Exception:
                 cls._redis_client = None
         return cls._redis_client
     
     @classmethod
     def set_cache(cls, key, value, ttl=60):
+        """Set cache with Redis primary, memory fallback"""
+        # Always store in memory cache as fallback
+        cls._memory_cache[key] = value
+        cls._cache_timestamps[key] = (time.time(), ttl)
+        
+        # Try Redis
         try:
             client = cls.get_redis_client()
             if client:
                 client.setex(key, ttl, json.dumps(value, default=str))
         except Exception:
-            pass
+            pass  # Memory cache already set
     
     @classmethod
     def get_cache(cls, key):
+        """Get cache with Redis primary, memory fallback"""
+        # Try Redis first
         try:
             client = cls.get_redis_client()
             if client:
                 data = client.get(key)
-                return json.loads(data) if data else None
+                if data:
+                    return json.loads(data)
         except Exception:
             pass
+        
+        # Fallback to memory cache
+        if key in cls._memory_cache:
+            timestamp, ttl = cls._cache_timestamps.get(key, (0, 0))
+            if time.time() - timestamp < ttl:
+                return cls._memory_cache[key]
+            else:
+                # Expired, remove
+                cls._memory_cache.pop(key, None)
+                cls._cache_timestamps.pop(key, None)
+        
         return None
 
 class CacheKeys:

@@ -578,6 +578,13 @@
 
     <script>
         const API_BASE = 'https://lavish-peace-production.up.railway.app';
+        const DEBUG = true;
+        
+        function log(message, data) {
+            if (DEBUG) {
+                console.log(`[Trading UI] ${message}`, data || '');
+            }
+        }
         let currentSymbol = null;
         let currentTimeframe = '1D';
         let ws = null;
@@ -602,10 +609,13 @@
                     ? `${API_BASE}/api/market/summary?limit=20`
                     : `${API_BASE}/api/market/summary?class=${assetClass}&limit=20`;
                 
+                log('Fetching market summary', url);
                 const response = await fetch(url);
+                log('Response status', response.status);
                 if (!response.ok) throw new Error('API request failed');
                 
                 const data = await response.json();
+                log('Market data received', { total: data.assets?.length, assets: data.assets });
                 
                 if (!data.assets || data.assets.length === 0) {
                     listEl.innerHTML = '<div class="error">No assets available</div>';
@@ -647,6 +657,7 @@
                     </div>
                 `).join('');
             } catch (error) {
+                log('Market summary error', error);
                 listEl.innerHTML = `<div class="error">Failed to load data: ${error.message}<br>Make sure API is running on ${API_BASE}</div>`;
             }
         }
@@ -673,6 +684,7 @@
 
         // Open detail view
         function openDetail(symbol) {
+            log('Opening detail view', symbol);
             currentSymbol = symbol;
             document.getElementById('detailView').classList.add('active');
             document.getElementById('detailTitle').textContent = symbol;
@@ -694,10 +706,14 @@
         // Load chart data
         async function loadChartData(symbol, timeframe) {
             try {
-                const response = await fetch(`${API_BASE}/api/asset/${symbol}/forecast?timeframe=${timeframe}`);
+                const url = `${API_BASE}/api/asset/${symbol}/forecast?timeframe=${timeframe}`;
+                log('Loading chart data', url);
+                const response = await fetch(url);
+                log('Chart response status', response.status);
                 if (!response.ok) throw new Error('Failed to load chart data');
                 
                 const data = await response.json();
+                log('Chart data received', data);
                 
                 document.getElementById('chartPrice').textContent = formatPrice(data.current_price, symbol);
                 document.getElementById('detailChange').innerHTML = `
@@ -717,6 +733,7 @@
                     renderChart(data.chart);
                 }
             } catch (error) {
+                log('Chart load error', error);
                 console.error('Chart load error:', error);
             }
         }
@@ -794,12 +811,22 @@
 
         // WebSocket connection
         function connectWebSocket(symbol, timeframe) {
-            if (ws) ws.close();
+            if (ws) {
+                log('Closing existing WebSocket');
+                ws.close();
+            }
 
-            ws = new WebSocket(`wss://lavish-peace-production.up.railway.app/ws/asset/${symbol}/forecast?timeframe=${timeframe}`);
+            const wsUrl = `wss://lavish-peace-production.up.railway.app/ws/asset/${symbol}/forecast?timeframe=${timeframe}`;
+            log('Connecting WebSocket', wsUrl);
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = () => {
+                log('WebSocket connected', symbol);
+            };
             
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
+                log('WebSocket message', { type: data.type, symbol });
                 
                 if (data.type === 'historical_data' && data.chart) {
                     renderChart(data.chart);
@@ -810,7 +837,12 @@
                 }
             };
 
+            ws.onclose = (event) => {
+                log('WebSocket closed', { code: event.code, reason: event.reason });
+            };
+            
             ws.onerror = (error) => {
+                log('WebSocket error', error);
                 console.error('WebSocket error:', error);
             };
         }

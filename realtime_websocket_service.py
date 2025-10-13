@@ -34,9 +34,10 @@ class RealTimeWebSocketService:
         }
         
         # Use centralized cache manager
-        from utils.cache_manager import CacheManager, CacheKeys
+        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
+        self.cache_ttl = CacheTTL
     
     async def start_binance_streams(self):
         """Start Binance WebSocket streams for all symbols immediately"""
@@ -89,9 +90,9 @@ class RealTimeWebSocketService:
                                 }
                                 self.price_cache[symbol] = price_data
                                 
-                                # Cache using centralized manager
+                                # Cache using centralized manager with standard TTL
                                 cache_key = self.cache_keys.price(symbol, 'crypto')
-                                self.cache_manager.set_cache(cache_key, price_data, ttl=30)
+                                self.cache_manager.set_cache(cache_key, price_data, ttl=self.cache_ttl.PRICE_CRYPTO)
                                 print(f"✅ {symbol}: ${price_data['current_price']:.2f}")
                             else:
                                 print(f"⚠️ {symbol}: Binance API returned status {response.status}")
@@ -159,9 +160,9 @@ class RealTimeWebSocketService:
                             }
                             self.price_cache[symbol] = price_data
                             
-                            # Cache using centralized manager
+                            # Cache using centralized manager with standard TTL
                             cache_key = self.cache_keys.price(symbol, 'crypto')
-                            self.cache_manager.set_cache(cache_key, price_data, ttl=30)
+                            self.cache_manager.set_cache(cache_key, price_data, ttl=self.cache_ttl.PRICE_CRYPTO)
             
 
                             
@@ -483,41 +484,12 @@ class RealTimeWebSocketService:
             cache_key = CacheKeys.websocket_history(symbol, timeframe)
             print(f"🔑 Cache key: {cache_key}", flush=True)
             
-            # Check memory cache first (fastest)
-            if not hasattr(self, 'memory_cache'):
-                from utils.memory_cache import LRUCache
-                self.memory_cache = LRUCache(maxsize=1000)
-            
-            cached_message = await self.memory_cache.get(cache_key)
+            # Check cache using centralized manager (Redis → Memory fallback)
+            cached_message = self.cache_manager.get_cache(cache_key)
             if cached_message:
-                print(f"💾 Using memory cache for {symbol}", flush=True)
-                await websocket.send_text(cached_message)
+                print(f"💾 Using cached data for {symbol}", flush=True)
+                await websocket.send_text(json.dumps(cached_message) if isinstance(cached_message, dict) else cached_message)
                 return
-            
-            # Try Redis cache
-            try:
-                import redis
-                import os
-                from dotenv import load_dotenv
-                load_dotenv()
-                
-                redis_client = redis.Redis(
-                    host=os.getenv('REDIS_HOST', 'localhost'),
-                    port=int(os.getenv('REDIS_PORT', '6379')),
-                    db=0,  # Use DB 0 for Railway compatibility (unified)
-                    password=os.getenv('REDIS_PASSWORD', None) if os.getenv('REDIS_PASSWORD') else None,
-                    decode_responses=True,
-                    socket_connect_timeout=10,
-                    socket_timeout=10
-                )
-                
-                cached_message = redis_client.get(cache_key)
-                if cached_message:
-                    await self.memory_cache.set(cache_key, cached_message, ttl=300)
-                    await websocket.send_text(cached_message)
-                    return
-            except Exception:
-                pass
             
             # Use database from constructor or fallback to global
             db = self.database
@@ -601,14 +573,8 @@ class RealTimeWebSocketService:
             
             message_json = json.dumps(historical_message)
             
-            # Cache the message for future connections
-            await self.memory_cache.set(cache_key, message_json, ttl=300)
-            
-            # Also cache in Redis for 10 minutes
-            try:
-                redis_client.setex(cache_key, 600, message_json)
-            except:
-                pass
+            # Cache using centralized manager
+            self.cache_manager.set_cache(cache_key, message_json, ttl=self.cache_ttl.WEBSOCKET_HISTORY)
             
             await websocket.send_text(message_json)
             
@@ -712,9 +678,9 @@ class RealTimeWebSocketService:
                                                 self.price_cache[symbol] = price_data
                                 
                                                 
-                                                # Cache using centralized manager
+                                                # Cache using centralized manager with standard TTL
                                                 cache_key = self.cache_keys.price(symbol, 'crypto')
-                                                self.cache_manager.set_cache(cache_key, price_data, ttl=30)
+                                                self.cache_manager.set_cache(cache_key, price_data, ttl=self.cache_ttl.PRICE_CRYPTO)
                                     except Exception as e:
                                         print(f"❌ Fallback failed for {symbol}: {e}")
                     except Exception as e:
@@ -743,9 +709,9 @@ class RealTimeWebSocketService:
                         self.price_cache[symbol] = price_data
                         print(f"🔄 Fallback data for {symbol}: ${price_data['current_price']:.2f}")
                         
-                        # Cache using centralized manager
+                        # Cache using centralized manager with standard TTL
                         cache_key = self.cache_keys.price(symbol, 'crypto')
-                        self.cache_manager.set_cache(cache_key, price_data, ttl=30)
+                        self.cache_manager.set_cache(cache_key, price_data, ttl=self.cache_ttl.PRICE_CRYPTO)
                                 
         except Exception as e:
             print(f"❌ Fallback crypto data failed for {symbol}: {e}")

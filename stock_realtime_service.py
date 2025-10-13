@@ -43,9 +43,10 @@ class StockRealtimeService:
         self.session = None
         
         # Use centralized cache manager
-        from utils.cache_manager import CacheManager, CacheKeys
+        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
+        self.cache_ttl = CacheTTL
     
     async def start_stock_streams(self):
         """Start real-time data collection for all stocks"""
@@ -98,9 +99,9 @@ class StockRealtimeService:
                 }
                 self.price_cache[symbol] = cache_data
                 
-                # Cache using centralized manager
+                # Cache using centralized manager with standard TTL
                 cache_key = self.cache_keys.price(symbol, 'stock')
-                self.cache_manager.set_cache(cache_key, cache_data, ttl=30)
+                self.cache_manager.set_cache(cache_key, cache_data, ttl=self.cache_ttl.PRICE_STOCK)
                 # Update candles and broadcast only if connections exist
                 if symbol in self.active_connections and self.active_connections[symbol]:
                     # Immediate price broadcast
@@ -576,8 +577,8 @@ class StockRealtimeService:
             
             message_json = json.dumps(historical_message)
             
-            # Cache using centralized manager
-            self.cache_manager.set_cache(cache_key, message_json, ttl=300)
+            # Cache using centralized manager with standard TTL
+            self.cache_manager.set_cache(cache_key, message_json, ttl=self.cache_ttl.WEBSOCKET_HISTORY)
             
             await websocket.send_text(message_json)
             

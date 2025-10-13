@@ -42,9 +42,10 @@ class MacroRealtimeService:
         }
         
         # Use centralized cache manager
-        from utils.cache_manager import CacheManager, CacheKeys
+        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
+        self.cache_ttl = CacheTTL
         
     async def start_macro_streams(self):
         """Start macro indicators simulation"""
@@ -81,9 +82,9 @@ class MacroRealtimeService:
                     }
                     self.price_cache[symbol] = cache_data
                     
-                    # Cache using centralized manager
+                    # Cache using centralized manager with standard TTL
                     cache_key = self.cache_keys.price(symbol, 'macro')
-                    self.cache_manager.set_cache(cache_key, cache_data, ttl=300)  # 5 min cache for FRED data
+                    self.cache_manager.set_cache(cache_key, cache_data, ttl=self.cache_ttl.PRICE_MACRO)
                     
                     # Store data for all timeframes if connections exist
                     if symbol in self.active_connections and self.active_connections[symbol]:
