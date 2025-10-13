@@ -15,7 +15,7 @@ def setup_trends_routes(app: FastAPI, model, database):
         db_timeframe = timeframe_mapping.get(timeframe, timeframe)
         
         try:
-            prediction = await model.predict(symbol)
+            prediction = await model.predict(symbol, db_timeframe)
             current_price = prediction.get('current_price', 0)
             
             if not data_validator.validate_price(symbol, current_price):

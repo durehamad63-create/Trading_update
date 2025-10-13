@@ -55,8 +55,8 @@ def setup_market_routes(app: FastAPI, model, database):
                     if not price_data:
                         continue
                     
-                    # Get prediction from cache
-                    pred_cache_key = cache_keys.prediction(symbol)
+                    # Get prediction from cache (1D timeframe for market summary)
+                    pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
@@ -96,7 +96,7 @@ def setup_market_routes(app: FastAPI, model, database):
                     if not price_data:
                         continue
                     
-                    pred_cache_key = cache_keys.prediction(symbol)
+                    pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
@@ -115,7 +115,8 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
-                        'asset_class': 'stocks'
+                        'asset_class': 'stocks',
+                        'timeframe': '1D'
                     })
                 except Exception as e:
                     print(f"Error processing {symbol}: {e}")
@@ -139,7 +140,7 @@ def setup_market_routes(app: FastAPI, model, database):
                     if not price_data:
                         continue
                     
-                    pred_cache_key = cache_keys.prediction(symbol)
+                    pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
@@ -158,7 +159,8 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
-                        'asset_class': 'macro'
+                        'asset_class': 'macro',
+                        'timeframe': '1D'
                     })
                 except Exception as e:
                     print(f"Error processing {symbol}: {e}")
@@ -190,7 +192,7 @@ def setup_market_routes(app: FastAPI, model, database):
                     if not price_data:
                         continue
                     
-                    pred_cache_key = cache_keys.prediction(symbol)
+                    pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
@@ -209,7 +211,8 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
-                        'asset_class': asset_class
+                        'asset_class': asset_class,
+                        'timeframe': '1D'
                     })
                 except Exception as e:
                     print(f"Error processing {symbol}: {e}")

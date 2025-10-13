@@ -482,8 +482,24 @@ class GapFillingService:
                     else:
                         features[idx] = current_price
                 
-                # Get real ML prediction using XGBoost
-                xgb_prediction = self.model.xgb_model.predict(features.reshape(1, -1))[0]
+                # Get real ML prediction using timeframe-specific XGBoost model
+                if hasattr(self.model, 'timeframe_models'):
+                    if asset_class == "crypto":
+                        model_class = 'Crypto'
+                    elif asset_class == "stocks":
+                        model_class = 'Stocks'
+                    else:
+                        model_class = 'Macro'
+                    
+                    timeframe_model_data = self.model.timeframe_models.get(model_class, {}).get(timeframe, {})
+                    if timeframe_model_data and 'model' in timeframe_model_data:
+                        model_to_use = timeframe_model_data['model']
+                    else:
+                        model_to_use = self.model.xgb_model
+                else:
+                    model_to_use = self.model.xgb_model
+                
+                xgb_prediction = model_to_use.predict(features.reshape(1, -1))[0]
                 predicted_price = current_price * (1 + xgb_prediction)
                 
                 # Determine direction and confidence based on prediction strength

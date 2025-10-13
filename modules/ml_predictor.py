@@ -64,11 +64,14 @@ class MobileMLModel:
             print(f"Model loaded successfully from {model_path} ({file_size} bytes)")
             pass
             
-            # Extract XGBoost model for compatibility
-            if hasattr(self.mobile_model, 'models') and 'Crypto' in self.mobile_model.models:
-                crypto_1d = self.mobile_model.models['Crypto'].get('1D', {})
-                self.xgb_model = crypto_1d.get('model')
-                self.model_features = crypto_1d.get('features', [])
+            # Store all timeframe models
+            if hasattr(self.mobile_model, 'models'):
+                self.timeframe_models = self.mobile_model.models
+                # Default to 1D model for backward compatibility
+                if 'Crypto' in self.timeframe_models:
+                    crypto_1d = self.timeframe_models['Crypto'].get('1D', {})
+                    self.xgb_model = crypto_1d.get('model')
+                    self.model_features = crypto_1d.get('features', [])
                 pass
             else:
                 raise Exception("Specialized model structure not found")
@@ -133,11 +136,11 @@ class MobileMLModel:
         except Exception as e:
             raise Exception(f"Failed to download model from Google Drive: {str(e)}")
     
-    async def predict(self, symbol):
+    async def predict(self, symbol, timeframe='1D'):
         """Generate real model prediction with Redis caching"""
         import time
         current_time = time.time()
-        cache_key = self.cache_keys.prediction(symbol)
+        cache_key = self.cache_keys.prediction(symbol, timeframe)
         
         # Check cache using centralized manager
         cached_data = self.cache_manager.get_cache(cache_key)
@@ -257,8 +260,20 @@ class MobileMLModel:
                 
                 feature_idx += 1
             
-            # Real ML prediction
-            xgb_prediction = self.xgb_model.predict(features.reshape(1, -1))[0]
+            # Get timeframe-specific model
+            asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
+            
+            if hasattr(self, 'timeframe_models') and asset_class in self.timeframe_models:
+                timeframe_model_data = self.timeframe_models[asset_class].get(timeframe, {})
+                if timeframe_model_data and 'model' in timeframe_model_data:
+                    model_to_use = timeframe_model_data['model']
+                else:
+                    model_to_use = self.xgb_model
+            else:
+                model_to_use = self.xgb_model
+            
+            # Real ML prediction with timeframe-specific model
+            xgb_prediction = model_to_use.predict(features.reshape(1, -1))[0]
             predicted_price = current_price * (1 + xgb_prediction)
             
             # Dynamic confidence based on multiple factors
@@ -287,6 +302,7 @@ class MobileMLModel:
             
             result = {
                 'symbol': symbol,
+                'timeframe': timeframe,
                 'current_price': round(current_price, 2),
                 'predicted_price': round(predicted_price, 2),
                 'forecast_direction': forecast['forecast_direction'],

@@ -8,7 +8,7 @@ def setup_forecast_routes(app: FastAPI, model, database):
     
     @app.get("/api/asset/{symbol}/forecast")
     async def asset_forecast(symbol: str, timeframe: str = "1D"):
-        prediction = await model.predict(symbol)
+        prediction = await model.predict(symbol, timeframe)
         if not prediction:
             return {"error": f"No prediction available for {symbol}"}
         

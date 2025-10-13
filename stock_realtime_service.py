@@ -360,7 +360,7 @@ class StockRealtimeService:
                     await self.database.store_actual_price(db_key, adjusted_price_data, timeframe)
                     
                     try:
-                        prediction = await self.model.predict(symbol)
+                        prediction = await self.model.predict(symbol, timeframe)
                         await self.database.store_forecast(db_key, prediction, timeframe)
                     except Exception:
                         pass
@@ -389,7 +389,7 @@ class StockRealtimeService:
                         asyncio.create_task(self._generate_fresh_stock_prediction(symbol))
                 else:
                     # Generate fresh prediction in background
-                    prediction = self.model.predict(symbol)
+                    prediction = await self.model.predict(symbol, '1D')
                     asyncio.create_task(self._generate_fresh_stock_prediction(symbol))
                     
                 if not isinstance(prediction, dict):
@@ -601,7 +601,7 @@ class StockRealtimeService:
     async def _generate_fresh_stock_prediction(self, symbol):
         """Generate fresh stock prediction in background"""
         try:
-            prediction = await self.model.predict(symbol)
+            prediction = await self.model.predict(symbol, '1D')
             # Cache will be updated by model.predict() method
         except Exception as e:
             pass

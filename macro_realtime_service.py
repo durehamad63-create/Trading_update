@@ -157,7 +157,7 @@ class MacroRealtimeService:
                     
                     # Generate and store forecast
                     try:
-                        prediction = await self.model.predict(symbol)
+                        prediction = await self.model.predict(symbol, '1D')
                         await self.database.store_forecast(timeframe_symbol, prediction)
                     except Exception:
                         pass

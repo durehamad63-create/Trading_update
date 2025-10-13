@@ -407,7 +407,7 @@ class RealTimeWebSocketService:
             
             try:
                 base_symbol = db_key.split('_')[0]
-                prediction = await self.model.predict(base_symbol)
+                prediction = await self.model.predict(base_symbol, timeframe)
                 await db.store_forecast(db_key, prediction, timeframe)
             except Exception as e:
                 pass
@@ -632,7 +632,7 @@ class RealTimeWebSocketService:
         """Generate fresh ML prediction in background"""
         try:
             print(f"🤖 Generating fresh ML prediction for {symbol}")
-            prediction = await self.model.predict(symbol)
+            prediction = await self.model.predict(symbol, '1D')
             print(f"✅ Fresh prediction generated for {symbol}: ${prediction.get('predicted_price', 'N/A'):.2f}")
             # Cache will be updated by model.predict() method
         except Exception as e:

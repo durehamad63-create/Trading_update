@@ -139,7 +139,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 
                 # Get prediction
                 try:
-                    prediction = await model.predict(symbol)
+                    prediction = await model.predict(symbol, timeframe)
                 except Exception as e:
                     logger.error(f"Prediction error for {symbol}: {e}")
                     continue

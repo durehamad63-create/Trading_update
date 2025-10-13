@@ -93,8 +93,8 @@ class CacheKeys:
         return f"price:{asset_type}:{symbol}"
     
     @staticmethod
-    def prediction(symbol):
-        return f"prediction:{symbol}"
+    def prediction(symbol, timeframe='1D'):
+        return f"prediction:{symbol}:{timeframe}"
     
     @staticmethod
     def market_summary(class_filter="all"):
