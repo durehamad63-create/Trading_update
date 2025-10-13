@@ -415,7 +415,7 @@ class StockRealtimeService:
                 "name": str(self.stock_symbols.get(symbol, symbol)),
                 "forecast_direction": str(prediction.get('forecast_direction', 'HOLD')),
                 "confidence": int(prediction.get('confidence', 50)),
-                "predicted_range": str(prediction.get('predicted_range', f"${current_price*0.98:.2f}–${current_price*1.02:.2f}")),
+
                 "chart": {
                     "past": past_prices,
                     "future": future_prices,

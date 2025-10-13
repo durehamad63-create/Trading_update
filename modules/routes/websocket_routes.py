@@ -194,7 +194,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "timeframe": timeframe,
                     "forecast_direction": forecast_direction,
                     "confidence": prediction.get('confidence', 75),
-                    "predicted_range": prediction.get('predicted_range', f"${current_price*0.98:.2f}-${current_price*1.02:.2f}"),
+
                     "current_price": current_price,
                     "change_24h": prediction.get('change_24h', 0),
                     "volume": 1000000000,
@@ -211,7 +211,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "forecast_stable": forecast_direction == 'HOLD',
                     "smooth_transition": True,
                     "ml_bounds_enforced": True,
-                    "target_range": prediction.get('predicted_range', f"${current_price*0.98:.2f}-${current_price*1.02:.2f}")
+
                 }
                 
                 await websocket.send_text(json.dumps(chart_update))

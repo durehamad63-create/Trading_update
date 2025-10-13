@@ -27,8 +27,8 @@ class RealTimeWebSocketService:
         self.price_cache = {}  # Real-time tick data
         self.candle_cache = {}  # Timeframe-specific candle data
         
-        # Use centralized symbol configuration
-        self.binance_symbols = {k: v['binance'].lower() for k, v in CRYPTO_SYMBOLS.items() if v.get('binance')}
+        # Use centralized symbol configuration - exclude stablecoins
+        self.binance_symbols = {k: v['binance'].lower() for k, v in CRYPTO_SYMBOLS.items() if v.get('binance') and not v.get('fixed_price')}
         
         # Timeframe intervals in minutes
         self.timeframe_intervals = {
@@ -379,7 +379,7 @@ class RealTimeWebSocketService:
                 "timestamp": current_time.strftime("%H:%M"),
                 "forecast_direction": str(forecast_direction),
                 "confidence": int(confidence),
-                "predicted_range": f"${predicted_price*0.98:.2f}–${predicted_price*1.02:.2f}",
+
                 "last_updated": current_time.isoformat()
             }
             

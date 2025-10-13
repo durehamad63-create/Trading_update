@@ -292,7 +292,6 @@ class MobileMLModel:
                 'forecast_direction': forecast['forecast_direction'],
                 'confidence': forecast['confidence'],
                 'change_24h': round(change_24h, 2),
-                'predicted_range': multi_asset.format_predicted_range(symbol, predicted_price),
                 'data_source': data_source
             }
             
@@ -495,12 +494,16 @@ class MobileMLModel:
         crypto_symbols = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOGE', 'USDT', 'USDC', 'TRX']
         
         try:
+            # Stablecoins return fixed price history
+            if symbol in ['USDT', 'USDC']:
+                return [1.0] * 30
+            
             if symbol in crypto_symbols:
                 # Use Binance for crypto historical data
                 binance_map = {
                     'BTC': 'BTCUSDT', 'ETH': 'ETHUSDT', 'BNB': 'BNBUSDT',
                     'SOL': 'SOLUSDT', 'ADA': 'ADAUSDT', 'XRP': 'XRPUSDT', 
-                    'DOGE': 'DOGEUSDT', 'USDT': 'USDCUSDT', 'USDC': 'USDCUSDT', 'TRX': 'TRXUSDT'
+                    'DOGE': 'DOGEUSDT', 'TRX': 'TRXUSDT'
                 }
                 
                 if symbol in binance_map:
