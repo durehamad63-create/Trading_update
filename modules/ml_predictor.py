@@ -181,190 +181,190 @@ class MobileMLModel:
             print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
             
             try:
-            # Get real data with faster timeout
-            price_start = time.time()
-            try:
-                real_price = await asyncio.wait_for(self._get_real_price(symbol), timeout=2.0)
-                price_time = (time.time() - price_start) * 1000
-                if not real_price:
-                    print(f"❌ [PRICE-FAIL] {symbol}:{timeframe} after {price_time:.1f}ms - No data", flush=True)
-                    raise Exception("No price data available")
-                print(f"✅ [PRICE-OK] {symbol}:{timeframe} in {price_time:.1f}ms = ${real_price}", flush=True)
-            except (asyncio.TimeoutError, Exception) as e:
-                price_time = (time.time() - price_start) * 1000
-                print(f"❌ [PRICE-TIMEOUT] {symbol}:{timeframe} after {price_time:.1f}ms: {e}", flush=True)
-                raise Exception(f"Failed to get real price data for {symbol}: {e}")
-            
-            current_price = real_price
-            change_start = time.time()
-            try:
-                change_24h = await asyncio.wait_for(self._get_real_change(symbol), timeout=1.0)
-                change_time = (time.time() - change_start) * 1000
-                data_source = 'ML Analysis'
-                print(f"✅ [CHANGE-OK] {symbol}:{timeframe} in {change_time:.1f}ms = {change_24h}%", flush=True)
-            except (asyncio.TimeoutError, Exception) as e:
-                change_time = (time.time() - change_start) * 1000
-                print(f"❌ [CHANGE-FAIL] {symbol}:{timeframe} after {change_time:.1f}ms: {e}", flush=True)
-                raise Exception(f"Failed to get 24h change for {symbol}: {e}")
-            
-            # Get real historical prices for feature engineering
-            hist_start = time.time()
-            real_prices = self._get_real_historical_prices(symbol)
-            hist_time = (time.time() - hist_start) * 1000
-            
-            if not real_prices or len(real_prices) < 10:
-                print(f"❌ [HIST-FAIL] {symbol}:{timeframe} after {hist_time:.1f}ms - got {len(real_prices) if real_prices else 0} points", flush=True)
-                raise Exception(f"Insufficient historical price data for {symbol}: need at least 10 points, got {len(real_prices) if real_prices else 0}")
-            
-            print(f"✅ [HIST-OK] {symbol}:{timeframe} in {hist_time:.1f}ms - got {len(real_prices)} points", flush=True)
-            
-            # Ensure current price is the latest
-            real_prices.append(current_price)
-            real_prices = real_prices[-30:]  # Keep last 30 days
-            
-            # Create feature vector using real market data
-            features = np.zeros(len(self.model_features))
-            
-            # Calculate real returns from historical prices
-            if len(real_prices) >= 2:
-                log_return = np.log(real_prices[-1] / real_prices[-2])
-            else:
-                log_return = 0.0
-            
-            # Calculate real technical indicators from historical data
-            returns = np.diff(np.log(real_prices)) if len(real_prices) >= 2 else [0]
-            volatility = np.std(returns) if len(returns) >= 2 else 0.015
-            
-            # Calculate RSI from real price movements
-            def calculate_rsi(prices, period=14):
-                if len(prices) < period + 1:
-                    return 50.0
-                deltas = np.diff(prices)
-                gains = np.where(deltas > 0, deltas, 0)
-                losses = np.where(deltas < 0, -deltas, 0)
-                avg_gain = np.mean(gains[-period:])
-                avg_loss = np.mean(losses[-period:])
-                if avg_loss == 0:
-                    return 100.0
-                rs = avg_gain / avg_loss
-                return 100 - (100 / (1 + rs))
-            
-            rsi = calculate_rsi(real_prices)
-            
-            # Fill features with real market-based values
-            feature_idx = 0
-            for feature_name in self.model_features:
-                if feature_idx >= len(features):
-                    break
-                    
-                if 'Return_Lag_1' in feature_name:
-                    features[feature_idx] = returns[-1] if len(returns) >= 1 else 0
-                elif 'Return_Lag_3' in feature_name:
-                    features[feature_idx] = returns[-3] if len(returns) >= 3 else 0
-                elif 'Return_Lag_5' in feature_name:
-                    features[feature_idx] = returns[-5] if len(returns) >= 5 else 0
-                elif 'Log_Return' in feature_name:
-                    features[feature_idx] = log_return
-                elif 'Volatility' in feature_name:
-                    features[feature_idx] = volatility
-                elif 'RSI' in feature_name:
-                    features[feature_idx] = rsi
-                elif 'Price_Momentum' in feature_name:
-                    features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
-                elif feature_name == 'High':
-                    features[feature_idx] = np.max(real_prices[-5:]) if len(real_prices) >= 5 else current_price
-                elif 'Close_Lag_1' in feature_name:
-                    features[feature_idx] = real_prices[-2] if len(real_prices) >= 2 else current_price
-                elif 'BB_Width' in feature_name:
-                    features[feature_idx] = volatility * 2
-                elif 'VIX' in feature_name:
-                    features[feature_idx] = volatility * 100
-                elif 'SPY' in feature_name:
-                    features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
-                else:
-                    if feature_idx == 0:
-                        features[feature_idx] = current_price
-                    elif feature_idx == 1:
-                        features[feature_idx] = change_24h
-                    elif feature_idx == 2:
-                        features[feature_idx] = np.mean(real_prices[-5:]) if len(real_prices) >= 5 else current_price
-                    elif feature_idx == 3:
-                        features[feature_idx] = np.mean(real_prices[-10:]) if len(real_prices) >= 10 else current_price
-                    elif feature_idx == 4:
-                        features[feature_idx] = volatility
-                    else:
-                        idx = min(feature_idx - 4, len(real_prices) - 1)
-                        features[feature_idx] = real_prices[-idx-1] if idx >= 0 else current_price
+                # Get real data with faster timeout
+                price_start = time.time()
+                try:
+                    real_price = await asyncio.wait_for(self._get_real_price(symbol), timeout=2.0)
+                    price_time = (time.time() - price_start) * 1000
+                    if not real_price:
+                        print(f"❌ [PRICE-FAIL] {symbol}:{timeframe} after {price_time:.1f}ms - No data", flush=True)
+                        raise Exception("No price data available")
+                    print(f"✅ [PRICE-OK] {symbol}:{timeframe} in {price_time:.1f}ms = ${real_price}", flush=True)
+                except (asyncio.TimeoutError, Exception) as e:
+                    price_time = (time.time() - price_start) * 1000
+                    print(f"❌ [PRICE-TIMEOUT] {symbol}:{timeframe} after {price_time:.1f}ms: {e}", flush=True)
+                    raise Exception(f"Failed to get real price data for {symbol}: {e}")
                 
-                feature_idx += 1
+                current_price = real_price
+                change_start = time.time()
+                try:
+                    change_24h = await asyncio.wait_for(self._get_real_change(symbol), timeout=1.0)
+                    change_time = (time.time() - change_start) * 1000
+                    data_source = 'ML Analysis'
+                    print(f"✅ [CHANGE-OK] {symbol}:{timeframe} in {change_time:.1f}ms = {change_24h}%", flush=True)
+                except (asyncio.TimeoutError, Exception) as e:
+                    change_time = (time.time() - change_start) * 1000
+                    print(f"❌ [CHANGE-FAIL] {symbol}:{timeframe} after {change_time:.1f}ms: {e}", flush=True)
+                    raise Exception(f"Failed to get 24h change for {symbol}: {e}")
             
-            # Get timeframe-specific model
-            asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
+                # Get real historical prices for feature engineering
+                hist_start = time.time()
+                real_prices = self._get_real_historical_prices(symbol)
+                hist_time = (time.time() - hist_start) * 1000
+                
+                if not real_prices or len(real_prices) < 10:
+                    print(f"❌ [HIST-FAIL] {symbol}:{timeframe} after {hist_time:.1f}ms - got {len(real_prices) if real_prices else 0} points", flush=True)
+                    raise Exception(f"Insufficient historical price data for {symbol}: need at least 10 points, got {len(real_prices) if real_prices else 0}")
+                
+                print(f"✅ [HIST-OK] {symbol}:{timeframe} in {hist_time:.1f}ms - got {len(real_prices)} points", flush=True)
             
-            if hasattr(self, 'timeframe_models') and asset_class in self.timeframe_models:
-                timeframe_model_data = self.timeframe_models[asset_class].get(timeframe, {})
-                if timeframe_model_data and 'model' in timeframe_model_data:
-                    model_to_use = timeframe_model_data['model']
+                # Ensure current price is the latest
+                real_prices.append(current_price)
+                real_prices = real_prices[-30:]  # Keep last 30 days
+            
+                # Create feature vector using real market data
+                features = np.zeros(len(self.model_features))
+            
+                # Calculate real returns from historical prices
+                if len(real_prices) >= 2:
+                    log_return = np.log(real_prices[-1] / real_prices[-2])
+                else:
+                    log_return = 0.0
+            
+                # Calculate real technical indicators from historical data
+                returns = np.diff(np.log(real_prices)) if len(real_prices) >= 2 else [0]
+                volatility = np.std(returns) if len(returns) >= 2 else 0.015
+            
+                # Calculate RSI from real price movements
+                def calculate_rsi(prices, period=14):
+                    if len(prices) < period + 1:
+                        return 50.0
+                    deltas = np.diff(prices)
+                    gains = np.where(deltas > 0, deltas, 0)
+                    losses = np.where(deltas < 0, -deltas, 0)
+                    avg_gain = np.mean(gains[-period:])
+                    avg_loss = np.mean(losses[-period:])
+                    if avg_loss == 0:
+                        return 100.0
+                    rs = avg_gain / avg_loss
+                    return 100 - (100 / (1 + rs))
+                
+                rsi = calculate_rsi(real_prices)
+            
+                # Fill features with real market-based values
+                feature_idx = 0
+                for feature_name in self.model_features:
+                    if feature_idx >= len(features):
+                        break
+                        
+                    if 'Return_Lag_1' in feature_name:
+                        features[feature_idx] = returns[-1] if len(returns) >= 1 else 0
+                    elif 'Return_Lag_3' in feature_name:
+                        features[feature_idx] = returns[-3] if len(returns) >= 3 else 0
+                    elif 'Return_Lag_5' in feature_name:
+                        features[feature_idx] = returns[-5] if len(returns) >= 5 else 0
+                    elif 'Log_Return' in feature_name:
+                        features[feature_idx] = log_return
+                    elif 'Volatility' in feature_name:
+                        features[feature_idx] = volatility
+                    elif 'RSI' in feature_name:
+                        features[feature_idx] = rsi
+                    elif 'Price_Momentum' in feature_name:
+                        features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
+                    elif feature_name == 'High':
+                        features[feature_idx] = np.max(real_prices[-5:]) if len(real_prices) >= 5 else current_price
+                    elif 'Close_Lag_1' in feature_name:
+                        features[feature_idx] = real_prices[-2] if len(real_prices) >= 2 else current_price
+                    elif 'BB_Width' in feature_name:
+                        features[feature_idx] = volatility * 2
+                    elif 'VIX' in feature_name:
+                        features[feature_idx] = volatility * 100
+                    elif 'SPY' in feature_name:
+                        features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
+                    else:
+                        if feature_idx == 0:
+                            features[feature_idx] = current_price
+                        elif feature_idx == 1:
+                            features[feature_idx] = change_24h
+                        elif feature_idx == 2:
+                            features[feature_idx] = np.mean(real_prices[-5:]) if len(real_prices) >= 5 else current_price
+                        elif feature_idx == 3:
+                            features[feature_idx] = np.mean(real_prices[-10:]) if len(real_prices) >= 10 else current_price
+                        elif feature_idx == 4:
+                            features[feature_idx] = volatility
+                        else:
+                            idx = min(feature_idx - 4, len(real_prices) - 1)
+                            features[feature_idx] = real_prices[-idx-1] if idx >= 0 else current_price
+                    
+                    feature_idx += 1
+            
+                # Get timeframe-specific model
+                asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
+                
+                if hasattr(self, 'timeframe_models') and asset_class in self.timeframe_models:
+                    timeframe_model_data = self.timeframe_models[asset_class].get(timeframe, {})
+                    if timeframe_model_data and 'model' in timeframe_model_data:
+                        model_to_use = timeframe_model_data['model']
+                    else:
+                        model_to_use = self.xgb_model
                 else:
                     model_to_use = self.xgb_model
-            else:
-                model_to_use = self.xgb_model
             
-            # Real ML prediction with timeframe-specific model
-            xgb_prediction = model_to_use.predict(features.reshape(1, -1))[0]
-            predicted_price = current_price * (1 + xgb_prediction)
+                # Real ML prediction with timeframe-specific model
+                xgb_prediction = model_to_use.predict(features.reshape(1, -1))[0]
+                predicted_price = current_price * (1 + xgb_prediction)
+                
+                # Dynamic confidence based on multiple factors
+                volatility_factor = abs(change_24h) * 0.5
+                prediction_strength = abs(xgb_prediction) * 200
+                
+                # Base confidence varies by symbol type
+                if symbol in ['BTC', 'ETH']:
+                    base_confidence = 75
+                elif symbol in ['USDT', 'USDC']:
+                    base_confidence = 90
+                else:
+                    base_confidence = 70
+                
+                # Confidence based on real volatility (lower volatility = higher confidence)
+                confidence = base_confidence + prediction_strength - volatility_factor - (volatility * 100)
+                confidence = min(95, max(50, confidence))
+                
+                # logging.info(f"🔥 REAL DATA: {symbol} price=${current_price} from API, ML prediction={xgb_prediction:.4f}")
+                
+                forecast = {
+                    'forecast_direction': 'UP' if xgb_prediction > 0.01 else 'DOWN' if xgb_prediction < -0.01 else 'HOLD',
+                    'confidence': int(confidence),
+                    'trend_score': int(xgb_prediction * 100)
+                }
+                
+                result = {
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'current_price': round(current_price, 2),
+                    'predicted_price': round(predicted_price, 2),
+                    'forecast_direction': forecast['forecast_direction'],
+                    'confidence': forecast['confidence'],
+                    'change_24h': round(change_24h, 2),
+                    'data_source': data_source
+                }
+                
+                # Cache using centralized manager with hot symbol priority
+                ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
+                
+                cache_store_start = time.time()
+                self.cache_manager.set_cache(cache_key, result, ttl)
+                cache_store_time = (time.time() - cache_store_start) * 1000
+                
+                # Cache the result in memory
+                self.prediction_cache[symbol] = (start_time, result)
+                
+                total_time = (time.time() - start_time) * 1000
+                print(f"✅ [PREDICT-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (cache_store: {cache_store_time:.1f}ms)", flush=True)
+                
+                return result
             
-            # Dynamic confidence based on multiple factors
-            volatility_factor = abs(change_24h) * 0.5
-            prediction_strength = abs(xgb_prediction) * 200
-            
-            # Base confidence varies by symbol type
-            if symbol in ['BTC', 'ETH']:
-                base_confidence = 75
-            elif symbol in ['USDT', 'USDC']:
-                base_confidence = 90
-            else:
-                base_confidence = 70
-            
-            # Confidence based on real volatility (lower volatility = higher confidence)
-            confidence = base_confidence + prediction_strength - volatility_factor - (volatility * 100)
-            confidence = min(95, max(50, confidence))
-            
-            # logging.info(f"🔥 REAL DATA: {symbol} price=${current_price} from API, ML prediction={xgb_prediction:.4f}")
-            
-            forecast = {
-                'forecast_direction': 'UP' if xgb_prediction > 0.01 else 'DOWN' if xgb_prediction < -0.01 else 'HOLD',
-                'confidence': int(confidence),
-                'trend_score': int(xgb_prediction * 100)
-            }
-            
-            result = {
-                'symbol': symbol,
-                'timeframe': timeframe,
-                'current_price': round(current_price, 2),
-                'predicted_price': round(predicted_price, 2),
-                'forecast_direction': forecast['forecast_direction'],
-                'confidence': forecast['confidence'],
-                'change_24h': round(change_24h, 2),
-                'data_source': data_source
-            }
-            
-            # Cache using centralized manager with hot symbol priority
-            ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
-            
-            cache_store_start = time.time()
-            self.cache_manager.set_cache(cache_key, result, ttl)
-            cache_store_time = (time.time() - cache_store_start) * 1000
-            
-            # Cache the result in memory
-            self.prediction_cache[symbol] = (start_time, result)
-            
-            total_time = (time.time() - start_time) * 1000
-            print(f"✅ [PREDICT-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (cache_store: {cache_store_time:.1f}ms)", flush=True)
-            
-            return result
-            
-        except Exception as e:
+            except Exception as e:
                 total_time = (time.time() - start_time) * 1000
                 print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
                 raise Exception(f"PREDICTION FAILED: Cannot generate prediction without real market data for {symbol}: {str(e)}")
