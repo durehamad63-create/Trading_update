@@ -568,6 +568,9 @@ class GapFillingService:
                 models = self.model.crypto_raw_models
             elif asset_class == 'stocks' and self.model.stock_raw_models:
                 models = self.model.stock_raw_models
+                # Map gap filling timeframes to trained model keys
+                timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
+                timeframe = timeframe_map.get(timeframe, timeframe)
             else:
                 return None
             
