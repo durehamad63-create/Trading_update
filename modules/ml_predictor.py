@@ -35,7 +35,7 @@ load_dotenv()
 class MobileMLModel:
     def __init__(self):
         self.last_request_time = {}
-        self.min_request_interval = 0.001  # 1ms for real-time
+        self.min_request_interval = 0.5  # 500ms to reduce rate limiting
         self.xgb_model = None
         self.prediction_cache = {}
         self.cache_ttl = 1  # 1 second cache for real-time updates
@@ -127,6 +127,8 @@ class MobileMLModel:
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
         self.cache_ttl = CacheTTL
+        
+        print(f"🔧 ML Predictor initialized: min_interval={self.min_request_interval*1000:.0f}ms, cache_ttl={self.cache_ttl}s")
     
     def _download_model_from_drive(self, model_path):
         """Download model from Google Drive with virus scan bypass"""
@@ -227,19 +229,19 @@ class MobileMLModel:
         else:
             print(f"❌ [CACHE-MISS] {symbol}:{timeframe} after {cache_time:.1f}ms", flush=True)
         
-        # Minimal rate limiting for real-time updates
+        # Rate limiting for real-time updates
         if symbol in self.last_request_time:
             time_since_last = start_time - self.last_request_time[symbol]
-            if time_since_last < 0.1:  # Only 100ms rate limit
-                print(f"⏱️ [RATE-LIMITED] {symbol}:{timeframe} - {time_since_last*1000:.1f}ms since last", flush=True)
+            if time_since_last < self.min_request_interval:
                 # Return memory cached result if available
                 if symbol in self.prediction_cache:
                     cache_time, cached_result = self.prediction_cache[symbol]
-                    if start_time - cache_time < 0.5:  # 500ms cache
-                        print(f"✅ [MEM-CACHE-HIT] {symbol}:{timeframe} from rate limit", flush=True)
+                    if start_time - cache_time < 2.0:  # 2s memory cache
+                        print(f"✅ [MEM-CACHE-HIT] {symbol}:{timeframe} from rate limit ({time_since_last*1000:.1f}ms)", flush=True)
                         return cached_result
-                print(f"❌ [RATE-LIMITED-NO-CACHE] {symbol}:{timeframe}", flush=True)
-                # Don't return None, continue with prediction
+                # If no cache, wait to avoid overload
+                await asyncio.sleep(self.min_request_interval - time_since_last)
+                print(f"⏳ [RATE-WAIT] {symbol}:{timeframe} waited {(self.min_request_interval - time_since_last)*1000:.1f}ms", flush=True)
         
         self.last_request_time[symbol] = start_time
         
@@ -829,6 +831,8 @@ class MobileMLModel:
                 'timeframe': timeframe,
                 'current_price': round(current_price, 2),
                 'predicted_price': round(predicted_price, 2),
+                'range_low': round(current_price * (1 + range_low), 2),
+                'range_high': round(current_price * (1 + range_high), 2),
                 'forecast_direction': direction,
                 'confidence': int(confidence),
                 'change_24h': round(change_24h, 2),

@@ -66,6 +66,22 @@ def setup_market_routes(app: FastAPI, model, database):
                             'predicted_price': price_data['current_price']
                         }
                     
+                    # Use real model range values if available
+                    current_price = price_data['current_price']
+                    range_low = prediction.get('range_low')
+                    range_high = prediction.get('range_high')
+                    
+                    # Format range based on price magnitude
+                    if range_low and range_high:
+                        if current_price >= 1000:
+                            predicted_range = f"${range_low/1000:.1f}k–${range_high/1000:.1f}k"
+                        elif current_price >= 1:
+                            predicted_range = f"${range_low:.2f}–${range_high:.2f}"
+                        else:
+                            predicted_range = f"${range_low:.4f}–${range_high:.4f}"
+                    else:
+                        predicted_range = None
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
@@ -75,6 +91,7 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'predicted_range': predicted_range,
                         'asset_class': 'crypto',
                         'timeframe': '1D'
                     })
@@ -107,6 +124,17 @@ def setup_market_routes(app: FastAPI, model, database):
                             'predicted_price': price_data['current_price']
                         }
                     
+                    # Use real model range values if available
+                    current_price = price_data['current_price']
+                    range_low = prediction.get('range_low')
+                    range_high = prediction.get('range_high')
+                    
+                    # Format range for stocks
+                    if range_low and range_high:
+                        predicted_range = f"${range_low:.2f}–${range_high:.2f}"
+                    else:
+                        predicted_range = None
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
@@ -116,6 +144,7 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'predicted_range': predicted_range,
                         'asset_class': 'stocks',
                         'timeframe': '1D'
                     })
@@ -160,6 +189,21 @@ def setup_market_routes(app: FastAPI, model, database):
                         'CONSUMER_CONFIDENCE': 'Monthly'
                     }
                     
+                    # Use real model range values if available
+                    range_low = prediction.get('range_low')
+                    range_high = prediction.get('range_high')
+                    
+                    # Format based on indicator type
+                    if range_low and range_high:
+                        if symbol == 'GDP':
+                            predicted_range = f"${range_low/1000:.1f}T–${range_high/1000:.1f}T"
+                        elif symbol in ['UNEMPLOYMENT', 'FED_RATE']:
+                            predicted_range = f"{range_low:.2f}%–{range_high:.2f}%"
+                        else:
+                            predicted_range = f"{range_low:.1f}–{range_high:.1f}"
+                    else:
+                        predicted_range = None
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
@@ -168,6 +212,7 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'predicted_range': predicted_range,
                         'asset_class': 'macro',
                         'timeframe': '1D',
                         'change_frequency': macro_frequencies.get(symbol, 'Monthly')
@@ -221,6 +266,32 @@ def setup_market_routes(app: FastAPI, model, database):
                         'CONSUMER_CONFIDENCE': 'Monthly'
                     }
                     
+                    # Use real model range values if available
+                    current_price = price_data['current_price']
+                    range_low = prediction.get('range_low')
+                    range_high = prediction.get('range_high')
+                    
+                    # Format range based on asset class
+                    if range_low and range_high:
+                        if asset_class == 'crypto':
+                            if current_price >= 1000:
+                                predicted_range = f"${range_low/1000:.1f}k–${range_high/1000:.1f}k"
+                            elif current_price >= 1:
+                                predicted_range = f"${range_low:.2f}–${range_high:.2f}"
+                            else:
+                                predicted_range = f"${range_low:.4f}–${range_high:.4f}"
+                        elif asset_class == 'stocks':
+                            predicted_range = f"${range_low:.2f}–${range_high:.2f}"
+                        else:  # macro
+                            if symbol == 'GDP':
+                                predicted_range = f"${range_low/1000:.1f}T–${range_high/1000:.1f}T"
+                            elif symbol in ['UNEMPLOYMENT', 'FED_RATE']:
+                                predicted_range = f"{range_low:.2f}%–{range_high:.2f}%"
+                            else:
+                                predicted_range = f"{range_low:.1f}–{range_high:.1f}"
+                    else:
+                        predicted_range = None
+                    
                     # Remove volume for macro indicators
                     asset_data = {
                         'symbol': symbol,
@@ -230,6 +301,7 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'predicted_range': predicted_range,
                         'asset_class': asset_class,
                         'timeframe': '1D'
                     }
