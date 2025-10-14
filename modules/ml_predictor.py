@@ -157,15 +157,20 @@ class MobileMLModel:
         
         # Minimal rate limiting for real-time updates
         if symbol in self.last_request_time:
-            time_since_last = current_time - self.last_request_time[symbol]
+            time_since_last = start_time - self.last_request_time[symbol]
             if time_since_last < 0.1:  # Only 100ms rate limit
+                print(f"⏱️ [RATE-LIMITED] {symbol}:{timeframe} - {time_since_last*1000:.1f}ms since last", flush=True)
                 # Return memory cached result if available
                 if symbol in self.prediction_cache:
                     cache_time, cached_result = self.prediction_cache[symbol]
-                    if current_time - cache_time < 0.5:  # 500ms cache
+                    if start_time - cache_time < 0.5:  # 500ms cache
+                        print(f"✅ [MEM-CACHE-HIT] {symbol}:{timeframe} from rate limit", flush=True)
                         return cached_result
+                print(f"❌ [RATE-LIMITED-NO-CACHE] {symbol}:{timeframe}", flush=True)
+                # Don't return None, continue with prediction
         
-        self.last_request_time[symbol] = current_time
+        self.last_request_time[symbol] = start_time
+        print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
         
         try:
             # Get real data with faster timeout
