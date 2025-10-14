@@ -169,24 +169,41 @@ class MobileMLModel:
         
         try:
             # Get real data with faster timeout
+            price_start = time.time()
             try:
                 real_price = await asyncio.wait_for(self._get_real_price(symbol), timeout=2.0)
+                price_time = (time.time() - price_start) * 1000
                 if not real_price:
+                    print(f"❌ [PRICE-FAIL] {symbol}:{timeframe} after {price_time:.1f}ms - No data", flush=True)
                     raise Exception("No price data available")
+                print(f"✅ [PRICE-OK] {symbol}:{timeframe} in {price_time:.1f}ms = ${real_price}", flush=True)
             except (asyncio.TimeoutError, Exception) as e:
+                price_time = (time.time() - price_start) * 1000
+                print(f"❌ [PRICE-TIMEOUT] {symbol}:{timeframe} after {price_time:.1f}ms: {e}", flush=True)
                 raise Exception(f"Failed to get real price data for {symbol}: {e}")
             
             current_price = real_price
+            change_start = time.time()
             try:
                 change_24h = await asyncio.wait_for(self._get_real_change(symbol), timeout=1.0)
+                change_time = (time.time() - change_start) * 1000
                 data_source = 'ML Analysis'
+                print(f"✅ [CHANGE-OK] {symbol}:{timeframe} in {change_time:.1f}ms = {change_24h}%", flush=True)
             except (asyncio.TimeoutError, Exception) as e:
+                change_time = (time.time() - change_start) * 1000
+                print(f"❌ [CHANGE-FAIL] {symbol}:{timeframe} after {change_time:.1f}ms: {e}", flush=True)
                 raise Exception(f"Failed to get 24h change for {symbol}: {e}")
             
             # Get real historical prices for feature engineering
+            hist_start = time.time()
             real_prices = self._get_real_historical_prices(symbol)
+            hist_time = (time.time() - hist_start) * 1000
+            
             if not real_prices or len(real_prices) < 10:
+                print(f"❌ [HIST-FAIL] {symbol}:{timeframe} after {hist_time:.1f}ms - got {len(real_prices) if real_prices else 0} points", flush=True)
                 raise Exception(f"Insufficient historical price data for {symbol}: need at least 10 points, got {len(real_prices) if real_prices else 0}")
+            
+            print(f"✅ [HIST-OK] {symbol}:{timeframe} in {hist_time:.1f}ms - got {len(real_prices)} points", flush=True)
             
             # Ensure current price is the latest
             real_prices.append(current_price)
@@ -335,6 +352,8 @@ class MobileMLModel:
             return result
             
         except Exception as e:
+            total_time = (time.time() - start_time) * 1000
+            print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
             raise Exception(f"PREDICTION FAILED: Cannot generate prediction without real market data for {symbol}: {str(e)}")
     
     def predict_for_timestamp(self, symbol, timestamp):
