@@ -95,10 +95,10 @@ class MobileMLModel:
             else:
                 raise Exception(f"Cannot start: {str(e)}")
         
-        # Load new raw models based on environment configuration
-        self.use_legacy_model = os.getenv('USE_LEGACY_MODEL', 'true').lower() == 'true'
-        self.use_raw_models = os.getenv('USE_RAW_MODELS', 'true').lower() == 'true'
-        self.raw_model_priority = os.getenv('RAW_MODEL_PRIORITY', 'false').lower() == 'true'
+        # Load new raw models - ALWAYS use raw models for crypto/stocks
+        self.use_legacy_model = os.getenv('USE_LEGACY_MODEL', 'false').lower() == 'true'
+        self.use_raw_models = True  # Always enabled
+        self.raw_model_priority = True  # Always prioritize raw models
         
         self.crypto_raw_models = None
         self.stock_raw_models = None
@@ -253,23 +253,27 @@ class MobileMLModel:
         async with self.prediction_semaphore:
             print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
             
-            # Try raw models first if priority is set
-            if self.raw_model_priority and self.use_raw_models:
+            # Determine asset class
+            asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
+            
+            # Use raw models for crypto and stocks
+            if asset_class in ['Crypto', 'Stocks']:
                 try:
                     raw_result = await self._predict_with_raw_models(symbol, timeframe)
                     if raw_result:
-                        print(f"✅ [RAW-PRIMARY] {symbol}:{timeframe} using raw models", flush=True)
+                        print(f"✅ [RAW-MODEL] {symbol}:{timeframe} using raw {asset_class.lower()} model", flush=True)
                         # Cache the result
                         ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
                         self.cache_manager.set_cache(cache_key, raw_result, ttl)
                         self.prediction_cache[symbol] = (start_time, raw_result)
                         return raw_result
                 except Exception as raw_e:
-                    print(f"⚠️ [RAW-PRIMARY-FAILED] {symbol}:{timeframe}: {raw_e}", flush=True)
+                    print(f"❌ [RAW-MODEL-FAILED] {symbol}:{timeframe}: {raw_e}", flush=True)
+                    raise Exception(f"Raw model prediction failed for {symbol}: {raw_e}")
             
-            # Use legacy model if enabled
-            if not self.use_legacy_model:
-                raise Exception("Legacy model disabled, trying raw models only")
+            # Use specialized model only for macro indicators
+            if asset_class != 'Macro':
+                raise Exception(f"No model available for {symbol} ({asset_class})")
             
             try:
                 # Get real data with faster timeout
@@ -389,8 +393,7 @@ class MobileMLModel:
                     
                     feature_idx += 1
             
-                # Get timeframe-specific model
-                asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
+                # Get timeframe-specific specialized model (macro only)
                 
                 if hasattr(self, 'timeframe_models') and asset_class in self.timeframe_models:
                     timeframe_model_data = self.timeframe_models[asset_class].get(timeframe, {})
@@ -440,40 +443,26 @@ class MobileMLModel:
                     'data_source': data_source
                 }
                 
-                # Cache using centralized manager with hot symbol priority
+                # Cache using centralized manager
                 ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
                 
                 cache_store_start = time.time()
                 self.cache_manager.set_cache(cache_key, result, ttl)
                 cache_store_time = (time.time() - cache_store_start) * 1000
+                print(f"✅ [CACHE-SET] {cache_key} in {cache_store_time:.1f}ms", flush=True)
                 
                 # Cache the result in memory
                 self.prediction_cache[symbol] = (start_time, result)
                 
                 total_time = (time.time() - start_time) * 1000
-                print(f"✅ [PREDICT-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (cache_store: {cache_store_time:.1f}ms)", flush=True)
+                print(f"✅ [PREDICT-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (specialized model)", flush=True)
                 
                 return result
             
             except Exception as e:
                 total_time = (time.time() - start_time) * 1000
                 print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
-                
-                # Try raw models as fallback if enabled
-                if self.use_raw_models and not self.raw_model_priority:
-                    try:
-                        raw_result = await self._predict_with_raw_models(symbol, timeframe)
-                        if raw_result:
-                            print(f"✅ [RAW-FALLBACK] {symbol}:{timeframe} using raw models", flush=True)
-                            # Cache the fallback result
-                            ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
-                            self.cache_manager.set_cache(cache_key, raw_result, ttl)
-                            self.prediction_cache[symbol] = (start_time, raw_result)
-                            return raw_result
-                    except Exception as raw_e:
-                        print(f"❌ [RAW-FALLBACK-FAILED] {symbol}:{timeframe}: {raw_e}", flush=True)
-                
-                raise Exception(f"PREDICTION FAILED: Cannot generate prediction without real market data for {symbol}: {str(e)}")
+                raise Exception(f"Specialized model prediction failed for {symbol}: {str(e)}")
     
     def predict_for_timestamp(self, symbol, timestamp):
         """Generate ML prediction for specific timestamp"""
@@ -762,10 +751,6 @@ class MobileMLModel:
     async def _predict_with_raw_models(self, symbol, timeframe='1D'):
         """Predict using new raw models (crypto/stock)"""
         try:
-            # Check if raw models are enabled
-            if not self.use_raw_models:
-                return None
-            
             # Determine asset type and select appropriate model
             if symbol in CRYPTO_SYMBOLS and self.crypto_raw_models:
                 models = self.crypto_raw_models
@@ -774,37 +759,46 @@ class MobileMLModel:
                 models = self.stock_raw_models
                 asset_type = 'stock'
             else:
-                return None
+                raise Exception(f"No raw models available for {symbol}")
             
             # Check if symbol and timeframe exist in models
-            if symbol not in models or timeframe not in models[symbol]:
-                return None
+            if symbol not in models:
+                raise Exception(f"Symbol {symbol} not found in {asset_type} raw models")
+            
+            if timeframe not in models[symbol]:
+                raise Exception(f"Timeframe {timeframe} not found for {symbol} in {asset_type} raw models")
             
             model_data = models[symbol][timeframe]
             required_keys = ['price_model', 'high_model', 'low_model', 'confidence_model', 'scaler', 'features']
             if not all(key in model_data for key in required_keys):
-                return None
+                raise Exception(f"Incomplete model data for {symbol}:{timeframe}")
             
             # Get current market data
             current_price = await self._get_real_price(symbol)
             change_24h = await self._get_real_change(symbol)
             
             if not current_price:
-                return None
+                raise Exception(f"No current price available for {symbol}")
             
             # Calculate raw features for the model
             features = await self._calculate_raw_features(symbol, current_price, asset_type)
             if features is None:
-                return None
+                raise Exception(f"Failed to calculate features for {symbol}")
             
-            # Create feature vector matching model expectations
+            # Create feature vector (exact match to test files)
             feature_vector = np.zeros(len(model_data['features']))
             for i, feature_name in enumerate(model_data['features']):
                 if feature_name in features:
                     value = features[feature_name]
                     feature_vector[i] = float(value) if not pd.isna(value) else 0.0
+                else:
+                    feature_vector[i] = 0.0
             
-            # Scale features and predict
+            # Check for NaN in feature vector
+            if np.any(np.isnan(feature_vector)):
+                raise Exception(f"NaN values in feature vector for {symbol}")
+            
+            # Scale features and predict (exact match to test files)
             features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
             
             price_change = model_data['price_model'].predict(features_scaled)[0]
@@ -812,79 +806,101 @@ class MobileMLModel:
             range_low = model_data['low_model'].predict(features_scaled)[0]
             confidence = model_data['confidence_model'].predict(features_scaled)[0]
             
-            # Clip predictions to reasonable ranges
-            price_change = np.clip(price_change, -0.1, 0.1)
+            # Clip predictions (exact match to test files)
+            if asset_type == 'crypto':
+                price_change = np.clip(price_change, -0.15, 0.15)  # ±15% for crypto
+                range_high = np.clip(range_high, -0.1, 0.2)        # -10% to +20%
+                range_low = np.clip(range_low, -0.2, 0.1)          # -20% to +10%
+            else:  # stocks
+                price_change = np.clip(price_change, -0.1, 0.1)    # ±10% for stocks
+                range_high = np.clip(range_high, -0.05, 0.1)       # -5% to +10%
+                range_low = np.clip(range_low, -0.1, 0.05)         # -10% to +5%
+            
             confidence = np.clip(confidence, 60, 95)
             
             predicted_price = current_price * (1 + price_change)
+            high_price = current_price * (1 + range_high)
+            low_price = current_price * (1 + range_low)
             
-            # Determine direction
-            if price_change > 0.003:
+            # Ensure range makes sense
+            if low_price > high_price:
+                low_price, high_price = high_price, low_price
+            
+            # Direction threshold (exact match to test files)
+            threshold = 0.005 if asset_type == 'crypto' else 0.003
+            if price_change > threshold:
                 direction = 'UP'
-            elif price_change < -0.003:
+            elif price_change < -threshold:
                 direction = 'DOWN'
             else:
                 direction = 'HOLD'
             
-            return {
+            result = {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'current_price': round(current_price, 2),
                 'predicted_price': round(predicted_price, 2),
-                'range_low': round(current_price * (1 + range_low), 2),
-                'range_high': round(current_price * (1 + range_high), 2),
+                'range_low': round(low_price, 2),
+                'range_high': round(high_price, 2),
                 'forecast_direction': direction,
                 'confidence': int(confidence),
                 'change_24h': round(change_24h, 2),
                 'data_source': f'Raw {asset_type.title()} Model'
             }
             
+            print(f"✅ [RAW-PREDICT] {symbol}:{timeframe} {direction} ({price_change*100:+.2f}%) -> ${predicted_price:.2f} | Range: ${low_price:.2f}–${high_price:.2f} | Conf: {confidence:.0f}%", flush=True)
+            return result
+            
         except Exception as e:
-            print(f"Raw model prediction failed for {symbol}: {e}")
-            return None
+            print(f"❌ [RAW-PREDICT-ERROR] {symbol}:{timeframe}: {e}", flush=True)
+            raise
     
     async def _calculate_raw_features(self, symbol, current_price, asset_type):
-        """Calculate raw features for new models"""
+        """Calculate raw features matching training pattern"""
         try:
             # Get historical prices
             historical_prices = self._get_real_historical_prices(symbol)
             if not historical_prices or len(historical_prices) < 20:
-                return None
+                raise Exception(f"Insufficient historical data: {len(historical_prices) if historical_prices else 0} points")
             
-            # Convert to pandas series for calculations
+            # Create DataFrame matching training format
             import pandas as pd
-            prices = pd.Series(historical_prices + [current_price])
+            df = pd.DataFrame({'close': historical_prices})
             
-            # Calculate technical indicators
-            sma_5 = prices.rolling(5).mean().iloc[-1]
-            sma_20 = prices.rolling(20).mean().iloc[-1]
+            # Calculate raw features (exact match to training)
+            df['sma_5'] = df['close'].rolling(5).mean()
+            df['sma_20'] = df['close'].rolling(20).mean()
+            df['price_sma5_ratio'] = df['close'] / df['sma_5']
+            df['price_sma20_ratio'] = df['close'] / df['sma_20']
             
-            returns = prices.pct_change()
-            returns_5 = prices.pct_change(5)
+            df['returns'] = df['close'].pct_change()
+            df['returns_5'] = df['close'].pct_change(5)
             
-            # RSI calculation
-            delta = prices.diff()
+            # RSI calculation (exact match to training)
+            delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
             rs = gain / loss
-            rsi = (100 - (100 / (1 + rs))).iloc[-1]
+            df['rsi'] = 100 - (100 / (1 + rs))
             
-            momentum_7 = (prices.iloc[-1] / prices.iloc[-8]) if len(prices) >= 8 else 1.0
-            volatility = returns.rolling(10).std().iloc[-1]
+            df['momentum_7'] = df['close'] / df['close'].shift(7)
+            df['volatility'] = df['returns'].rolling(10).std()
             
-            # Handle NaN values
+            # Get latest values
+            latest = df.iloc[-1]
+            
+            # Handle NaN values (exact match to test files)
             features = {
-                'price_sma5_ratio': (current_price / sma_5) if pd.notna(sma_5) and sma_5 > 0 else 1.0,
-                'price_sma20_ratio': (current_price / sma_20) if pd.notna(sma_20) and sma_20 > 0 else 1.0,
-                'returns': returns.iloc[-1] if pd.notna(returns.iloc[-1]) else 0.0,
-                'returns_5': returns_5.iloc[-1] if pd.notna(returns_5.iloc[-1]) else 0.0,
-                'rsi': rsi if pd.notna(rsi) else 50.0,
-                'momentum_7': momentum_7 if pd.notna(momentum_7) else 1.0,
-                'volatility': volatility if pd.notna(volatility) else 0.02
+                'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
+                'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
+                'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
+                'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
+                'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
+                'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
+                'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
             }
             
             return features
             
         except Exception as e:
-            print(f"Feature calculation failed for {symbol}: {e}")
-            return None
+            raise Exception(f"Feature calculation failed for {symbol}: {e}")
