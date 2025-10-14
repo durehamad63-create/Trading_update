@@ -50,6 +50,8 @@ class CacheManager:
     @classmethod
     def set_cache(cls, key, value, ttl=60):
         """Set cache with Redis primary, memory fallback"""
+        start_time = time.time()
+        
         # Enforce memory cache size limit (LRU eviction)
         if len(cls._memory_cache) >= cls._max_memory_cache_size:
             # Remove oldest entry
@@ -66,22 +68,46 @@ class CacheManager:
         try:
             client = cls.get_redis_client()
             if client:
-                client.setex(key, ttl, json.dumps(value, default=str))
+                redis_start = time.time()
+                serialize_start = time.time()
+                serialized = json.dumps(value, default=str)
+                serialize_time = (time.time() - serialize_start) * 1000
+                
+                client.setex(key, ttl, serialized)
+                redis_time = (time.time() - redis_start) * 1000
+                total_time = (time.time() - start_time) * 1000
+                print(f"✅ [CACHE-SET] {key} in {total_time:.1f}ms (serialize:{serialize_time:.1f}ms, redis:{redis_time:.1f}ms)", flush=True)
         except Exception as e:
+            total_time = (time.time() - start_time) * 1000
+            print(f"❌ [CACHE-SET-ERROR] {key} after {total_time:.1f}ms: {e}", flush=True)
             import logging
             logging.warning(f"Redis cache set failed for {key}: {e}")
     
     @classmethod
     def get_cache(cls, key):
         """Get cache with Redis primary, memory fallback"""
+        start_time = time.time()
+        
         # Try Redis first
         try:
             client = cls.get_redis_client()
             if client:
+                redis_start = time.time()
                 data = client.get(key)
+                redis_time = (time.time() - redis_start) * 1000
+                
                 if data:
-                    return json.loads(data)
+                    parse_start = time.time()
+                    result = json.loads(data)
+                    parse_time = (time.time() - parse_start) * 1000
+                    total_time = (time.time() - start_time) * 1000
+                    print(f"✅ [REDIS-HIT] {key} in {total_time:.1f}ms (redis:{redis_time:.1f}ms, parse:{parse_time:.1f}ms)", flush=True)
+                    return result
+                else:
+                    print(f"❌ [REDIS-MISS] {key} in {redis_time:.1f}ms", flush=True)
         except Exception as e:
+            redis_time = (time.time() - start_time) * 1000
+            print(f"❌ [REDIS-ERROR] {key} after {redis_time:.1f}ms: {e}", flush=True)
             import logging
             logging.debug(f"Redis cache get failed for {key}: {e}")
         
@@ -89,12 +115,18 @@ class CacheManager:
         if key in cls._memory_cache:
             timestamp, ttl = cls._cache_timestamps.get(key, (0, 0))
             if time.time() - timestamp < ttl:
+                total_time = (time.time() - start_time) * 1000
+                print(f"✅ [MEM-HIT] {key} in {total_time:.1f}ms", flush=True)
                 return cls._memory_cache[key]
             else:
                 # Expired, remove
                 cls._memory_cache.pop(key, None)
                 cls._cache_timestamps.pop(key, None)
+                total_time = (time.time() - start_time) * 1000
+                print(f"⏰ [MEM-EXPIRED] {key} in {total_time:.1f}ms", flush=True)
         
+        total_time = (time.time() - start_time) * 1000
+        print(f"❌ [CACHE-MISS] {key} in {total_time:.1f}ms", flush=True)
         return None
     
     @classmethod

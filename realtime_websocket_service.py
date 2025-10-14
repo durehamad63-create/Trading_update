@@ -330,11 +330,15 @@ class RealTimeWebSocketService:
     
     async def _generate_timeframe_forecast(self, symbol, timeframe, current_time):
         """Generate real-time price update for specific timeframe"""
+        start_time = time.time()
+        print(f"🔍 [FORECAST-START] {symbol}:{timeframe}", flush=True)
+        
         try:
             # Get candle data for this timeframe
             if (symbol not in self.candle_cache or 
                 timeframe not in self.candle_cache[symbol] or 
                 not self.candle_cache[symbol][timeframe]):
+                print(f"❌ [NO-CANDLES] {symbol}:{timeframe}", flush=True)
                 return
             
             candles = self.candle_cache[symbol][timeframe]
@@ -352,20 +356,26 @@ class RealTimeWebSocketService:
             confidence = 75
             
             # Try cached prediction first for speed
+            pred_start = time.time()
             try:
                 if hasattr(self.model, 'prediction_cache') and symbol in self.model.prediction_cache:
                     cache_time, cached_pred = self.model.prediction_cache[symbol]
-                    if (datetime.now().timestamp() - cache_time) < 10:  # Use if less than 10s old
+                    cache_age = datetime.now().timestamp() - cache_time
+                    
+                    if cache_age < 10:  # Use if less than 10s old
                         predicted_price = float(cached_pred.get('predicted_price', current_price))
                         forecast_direction = cached_pred.get('forecast_direction', 'HOLD')
                         confidence = cached_pred.get('confidence', 75)
-
+                        print(f"✅ [PRED-CACHE-HIT] {symbol}:{timeframe} age:{cache_age:.1f}s", flush=True)
+                    else:
+                        print(f"⏰ [PRED-CACHE-STALE] {symbol}:{timeframe} age:{cache_age:.1f}s", flush=True)
+                        asyncio.create_task(self._generate_fresh_prediction(symbol))
                 else:
-                    print(f"🔄 No cached prediction for {symbol}, generating fresh prediction")
+                    print(f"❌ [PRED-CACHE-MISS] {symbol}:{timeframe}", flush=True)
                     # Generate fresh prediction in background (non-blocking)
                     asyncio.create_task(self._generate_fresh_prediction(symbol))
             except Exception as e:
-                print(f"❌ Prediction cache error for {symbol}: {e}")
+                print(f"❌ [PRED-ERROR] {symbol}: {e}", flush=True)
             
             # Send real-time price update (for live chart updates)
             realtime_data = {
@@ -384,9 +394,16 @@ class RealTimeWebSocketService:
             }
             
             # Broadcast real-time update
+            broadcast_start = time.time()
             await self._broadcast_to_timeframe(symbol, timeframe, realtime_data)
+            broadcast_time = (time.time() - broadcast_start) * 1000
+            
+            total_time = (time.time() - start_time) * 1000
+            print(f"✅ [FORECAST-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (broadcast: {broadcast_time:.1f}ms)", flush=True)
             
         except Exception as e:
+            total_time = (time.time() - start_time) * 1000
+            print(f"❌ [FORECAST-ERROR] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
             ErrorHandler.log_prediction_error('realtime_update', str(e))
     
     async def _store_realtime_data(self, db_key, price_data, timeframe):

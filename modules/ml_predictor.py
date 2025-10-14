@@ -139,13 +139,21 @@ class MobileMLModel:
     async def predict(self, symbol, timeframe='1D'):
         """Generate real model prediction with Redis caching"""
         import time
-        current_time = time.time()
+        start_time = time.time()
+        print(f"🔍 [PREDICT-START] {symbol}:{timeframe} at {start_time:.3f}", flush=True)
+        
         cache_key = self.cache_keys.prediction(symbol, timeframe)
         
         # Check cache using centralized manager
+        cache_start = time.time()
         cached_data = self.cache_manager.get_cache(cache_key)
+        cache_time = (time.time() - cache_start) * 1000
+        
         if cached_data:
+            print(f"✅ [CACHE-HIT] {symbol}:{timeframe} in {cache_time:.1f}ms", flush=True)
             return cached_data
+        else:
+            print(f"❌ [CACHE-MISS] {symbol}:{timeframe} after {cache_time:.1f}ms", flush=True)
         
         # Minimal rate limiting for real-time updates
         if symbol in self.last_request_time:
@@ -313,10 +321,16 @@ class MobileMLModel:
             
             # Cache using centralized manager with hot symbol priority
             ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
+            
+            cache_store_start = time.time()
             self.cache_manager.set_cache(cache_key, result, ttl)
+            cache_store_time = (time.time() - cache_store_start) * 1000
             
             # Cache the result in memory
-            self.prediction_cache[symbol] = (current_time, result)
+            self.prediction_cache[symbol] = (start_time, result)
+            
+            total_time = (time.time() - start_time) * 1000
+            print(f"✅ [PREDICT-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (cache_store: {cache_store_time:.1f}ms)", flush=True)
             
             return result
             
