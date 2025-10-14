@@ -410,12 +410,16 @@ class GapFillingService:
                     if not prediction_result:
                         continue
                     
+                    # Skip if no range predictions from model
+                    if 'range_low' not in prediction_result or 'range_high' not in prediction_result:
+                        continue
+                    
                     predictions.append({
                         'timestamp': data[i-1]['timestamp'],
                         'actual_price': current_price,
                         'predicted_price': prediction_result['predicted_price'],
-                        'range_low': prediction_result.get('range_low', current_price * 0.98),
-                        'range_high': prediction_result.get('range_high', current_price * 1.02),
+                        'range_low': prediction_result['range_low'],
+                        'range_high': prediction_result['range_high'],
                         'forecast_direction': prediction_result['forecast_direction'],
                         'confidence': prediction_result['confidence'],
                         'trend_score': int((prediction_result['predicted_price'] - current_price) / current_price * 100),
