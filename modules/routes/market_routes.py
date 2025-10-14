@@ -75,7 +75,8 @@ def setup_market_routes(app: FastAPI, model, database):
                         'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
-                        'asset_class': 'crypto'
+                        'asset_class': 'crypto',
+                        'timeframe': '1D'
                     })
                 except Exception as e:
                     print(f"Error processing {symbol}: {e}")
@@ -150,6 +151,15 @@ def setup_market_routes(app: FastAPI, model, database):
                             'predicted_price': price_data['current_price']
                         }
                     
+                    # Define update frequencies for macro indicators
+                    macro_frequencies = {
+                        'GDP': 'Quarterly',
+                        'CPI': 'Monthly', 
+                        'UNEMPLOYMENT': 'Monthly',
+                        'FED_RATE': 'Every 6 weeks (FOMC meetings)',
+                        'CONSUMER_CONFIDENCE': 'Monthly'
+                    }
+                    
                     assets.append({
                         'symbol': symbol,
                         'name': multi_asset.get_asset_name(symbol),
@@ -159,7 +169,8 @@ def setup_market_routes(app: FastAPI, model, database):
                         'confidence': prediction.get('confidence', 75),
                         'predicted_price': prediction.get('predicted_price', price_data['current_price']),
                         'asset_class': 'macro',
-                        'timeframe': '1D'
+                        'timeframe': '1D',
+                        'change_frequency': macro_frequencies.get(symbol, 'Monthly')
                     })
                 except Exception as e:
                     print(f"Error processing {symbol}: {e}")
@@ -201,6 +212,15 @@ def setup_market_routes(app: FastAPI, model, database):
                             'predicted_price': price_data['current_price']
                         }
                     
+                    # Define update frequencies for macro indicators
+                    macro_frequencies = {
+                        'GDP': 'Quarterly',
+                        'CPI': 'Monthly', 
+                        'UNEMPLOYMENT': 'Monthly',
+                        'FED_RATE': 'Every 6 weeks (FOMC meetings)',
+                        'CONSUMER_CONFIDENCE': 'Monthly'
+                    }
+                    
                     # Remove volume for macro indicators
                     asset_data = {
                         'symbol': symbol,
@@ -217,6 +237,9 @@ def setup_market_routes(app: FastAPI, model, database):
                     # Add volume only for crypto and stocks, not macro
                     if asset_class != 'macro':
                         asset_data['volume'] = price_data.get('volume', 0)
+                    else:
+                        # Add change_frequency for macro indicators
+                        asset_data['change_frequency'] = macro_frequencies.get(symbol, 'Monthly')
                     
                     assets.append(asset_data)
                 except Exception as e:

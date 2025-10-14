@@ -20,9 +20,17 @@ def setup_websocket_routes(app: FastAPI, model, database):
         try:
             # Sanitize inputs
             symbol = WebSocketSecurity.sanitize_symbol(symbol)
-            timeframe = WebSocketSecurity.validate_timeframe(
-                websocket.query_params.get('timeframe', '1D')
-            )
+            requested_timeframe = websocket.query_params.get('timeframe', '1D')
+            
+            # Check if macro indicator - they don't support timeframes
+            macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+            is_macro = symbol in macro_symbols
+            
+            if is_macro and requested_timeframe != '1D':
+                await websocket.close(code=1008, reason=f"Macro indicator {symbol} does not support timeframe {requested_timeframe}")
+                return
+            
+            timeframe = '1D' if is_macro else WebSocketSecurity.validate_timeframe(requested_timeframe)
         except ValueError as e:
             logger.error(f"Invalid WebSocket parameters: {e}")
             await websocket.close(code=1008, reason="Invalid parameters")
@@ -187,6 +195,10 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 for i in range(7):
                     timestamps.append((last_timestamp + timedelta(days=i+1)).isoformat())
                 
+                # Check if macro indicator
+                macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+                is_macro = symbol in macro_symbols
+                
                 chart_update = {
                     "type": "chart_update",
                     "symbol": symbol,
@@ -194,10 +206,8 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "timeframe": timeframe,
                     "forecast_direction": forecast_direction,
                     "confidence": prediction.get('confidence', 75),
-
                     "current_price": current_price,
                     "change_24h": prediction.get('change_24h', 0),
-                    "volume": 1000000000,
                     "last_updated": WebSocketSecurity.get_utc_now().isoformat(),
                     "chart": {
                         "past": past_prices,
@@ -211,8 +221,20 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "forecast_stable": forecast_direction == 'HOLD',
                     "smooth_transition": True,
                     "ml_bounds_enforced": True,
-
                 }
+                
+                # Add volume for non-macro indicators, change_frequency for macro
+                if not is_macro:
+                    chart_update["volume"] = 1000000000
+                else:
+                    macro_frequencies = {
+                        'GDP': 'Quarterly',
+                        'CPI': 'Monthly', 
+                        'UNEMPLOYMENT': 'Monthly',
+                        'FED_RATE': 'Every 6 weeks (FOMC meetings)',
+                        'CONSUMER_CONFIDENCE': 'Monthly'
+                    }
+                    chart_update["change_frequency"] = macro_frequencies.get(symbol, 'Monthly')
                 
                 await websocket.send_text(json.dumps(chart_update))
         
