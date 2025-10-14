@@ -103,22 +103,29 @@ class MobileMLModel:
         self.crypto_raw_models = None
         self.stock_raw_models = None
         
-        if self.use_raw_models:
+        # Load crypto raw models (REQUIRED for crypto predictions)
+        crypto_model_path = 'models/crypto_raw/crypto_raw_models.pkl'
+        if os.path.exists(crypto_model_path):
             try:
-                crypto_model_path = 'models/crypto_raw/crypto_raw_models.pkl'
-                if os.path.exists(crypto_model_path):
-                    self.crypto_raw_models = joblib.load(crypto_model_path)
-                    print(f"✅ Crypto raw models loaded from {crypto_model_path}")
+                self.crypto_raw_models = joblib.load(crypto_model_path)
+                print(f"✅ Crypto raw models loaded from {crypto_model_path}")
             except Exception as e:
-                print(f"⚠️ Crypto raw models not available: {e}")
-            
+                print(f"❌ Crypto raw models failed to load: {e}")
+        else:
+            print(f"⚠️ Crypto raw models not found at {crypto_model_path}")
+            print(f"🛠️ Run 'python train_crypto_model_raw.py' to train models")
+        
+        # Load stock raw models (REQUIRED for stock predictions)
+        stock_model_path = 'models/stock_raw/stock_raw_models.pkl'
+        if os.path.exists(stock_model_path):
             try:
-                stock_model_path = 'models/stock_raw/stock_raw_models.pkl'
-                if os.path.exists(stock_model_path):
-                    self.stock_raw_models = joblib.load(stock_model_path)
-                    print(f"✅ Stock raw models loaded from {stock_model_path}")
+                self.stock_raw_models = joblib.load(stock_model_path)
+                print(f"✅ Stock raw models loaded from {stock_model_path}")
             except Exception as e:
-                print(f"⚠️ Stock raw models not available: {e}")
+                print(f"❌ Stock raw models failed to load: {e}")
+        else:
+            print(f"⚠️ Stock raw models not found at {stock_model_path}")
+            print(f"🛠️ Run 'python train_stock_model_raw.py' to train models")
         
         print(f"🔧 Model Configuration: Legacy={self.use_legacy_model}, Raw={self.use_raw_models}, Priority={'Raw' if self.raw_model_priority else 'Legacy'}")
         
