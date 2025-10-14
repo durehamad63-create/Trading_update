@@ -12,8 +12,8 @@ class CacheTTL:
     PRICE_CRYPTO = 30
     PRICE_STOCK = 30
     PRICE_MACRO = 300
-    PREDICTION_HOT = 1
-    PREDICTION_NORMAL = 3
+    PREDICTION_HOT = 5  # Increased from 1s to 5s
+    PREDICTION_NORMAL = 10  # Increased from 3s to 10s
     CHART_DATA = 600
     WEBSOCKET_HISTORY = 300
 
