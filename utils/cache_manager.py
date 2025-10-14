@@ -9,13 +9,13 @@ load_dotenv()
 
 class CacheTTL:
     """Centralized TTL configuration"""
-    PRICE_CRYPTO = 30
-    PRICE_STOCK = 30
-    PRICE_MACRO = 300
-    PREDICTION_HOT = 5  # Increased from 1s to 5s
-    PREDICTION_NORMAL = 10  # Increased from 3s to 10s
-    CHART_DATA = 600
-    WEBSOCKET_HISTORY = 300
+    PRICE_CRYPTO = 60
+    PRICE_STOCK = 60
+    PRICE_MACRO = 600
+    PREDICTION_HOT = 30
+    PREDICTION_NORMAL = 60
+    CHART_DATA = 900
+    WEBSOCKET_HISTORY = 600
 
 class CacheManager:
     _redis_client = None
@@ -74,12 +74,7 @@ class CacheManager:
                 serialize_time = (time.time() - serialize_start) * 1000
                 
                 client.setex(key, ttl, serialized)
-                redis_time = (time.time() - redis_start) * 1000
-                total_time = (time.time() - start_time) * 1000
-                print(f"✅ [CACHE-SET] {key} in {total_time:.1f}ms (serialize:{serialize_time:.1f}ms, redis:{redis_time:.1f}ms)", flush=True)
         except Exception as e:
-            total_time = (time.time() - start_time) * 1000
-            print(f"❌ [CACHE-SET-ERROR] {key} after {total_time:.1f}ms: {e}", flush=True)
             import logging
             logging.warning(f"Redis cache set failed for {key}: {e}")
     
@@ -97,17 +92,9 @@ class CacheManager:
                 redis_time = (time.time() - redis_start) * 1000
                 
                 if data:
-                    parse_start = time.time()
                     result = json.loads(data)
-                    parse_time = (time.time() - parse_start) * 1000
-                    total_time = (time.time() - start_time) * 1000
-                    print(f"✅ [REDIS-HIT] {key} in {total_time:.1f}ms (redis:{redis_time:.1f}ms, parse:{parse_time:.1f}ms)", flush=True)
                     return result
-                else:
-                    print(f"❌ [REDIS-MISS] {key} in {redis_time:.1f}ms", flush=True)
         except Exception as e:
-            redis_time = (time.time() - start_time) * 1000
-            print(f"❌ [REDIS-ERROR] {key} after {redis_time:.1f}ms: {e}", flush=True)
             import logging
             logging.debug(f"Redis cache get failed for {key}: {e}")
         
@@ -115,18 +102,12 @@ class CacheManager:
         if key in cls._memory_cache:
             timestamp, ttl = cls._cache_timestamps.get(key, (0, 0))
             if time.time() - timestamp < ttl:
-                total_time = (time.time() - start_time) * 1000
-                print(f"✅ [MEM-HIT] {key} in {total_time:.1f}ms", flush=True)
                 return cls._memory_cache[key]
             else:
                 # Expired, remove
                 cls._memory_cache.pop(key, None)
                 cls._cache_timestamps.pop(key, None)
-                total_time = (time.time() - start_time) * 1000
-                print(f"⏰ [MEM-EXPIRED] {key} in {total_time:.1f}ms", flush=True)
         
-        total_time = (time.time() - start_time) * 1000
-        print(f"❌ [CACHE-MISS] {key} in {total_time:.1f}ms", flush=True)
         return None
     
     @classmethod
