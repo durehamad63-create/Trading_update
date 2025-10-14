@@ -7,6 +7,7 @@ import time
 import pickle
 import os
 import numpy as np
+import pandas as pd
 import requests
 import yfinance as yf
 import warnings
@@ -94,6 +95,33 @@ class MobileMLModel:
             else:
                 raise Exception(f"Cannot start: {str(e)}")
         
+        # Load new raw models based on environment configuration
+        self.use_legacy_model = os.getenv('USE_LEGACY_MODEL', 'true').lower() == 'true'
+        self.use_raw_models = os.getenv('USE_RAW_MODELS', 'true').lower() == 'true'
+        self.raw_model_priority = os.getenv('RAW_MODEL_PRIORITY', 'false').lower() == 'true'
+        
+        self.crypto_raw_models = None
+        self.stock_raw_models = None
+        
+        if self.use_raw_models:
+            try:
+                crypto_model_path = 'models/crypto_raw/crypto_raw_models.pkl'
+                if os.path.exists(crypto_model_path):
+                    self.crypto_raw_models = joblib.load(crypto_model_path)
+                    print(f"✅ Crypto raw models loaded from {crypto_model_path}")
+            except Exception as e:
+                print(f"⚠️ Crypto raw models not available: {e}")
+            
+            try:
+                stock_model_path = 'models/stock_raw/stock_raw_models.pkl'
+                if os.path.exists(stock_model_path):
+                    self.stock_raw_models = joblib.load(stock_model_path)
+                    print(f"✅ Stock raw models loaded from {stock_model_path}")
+            except Exception as e:
+                print(f"⚠️ Stock raw models not available: {e}")
+        
+        print(f"🔧 Model Configuration: Legacy={self.use_legacy_model}, Raw={self.use_raw_models}, Priority={'Raw' if self.raw_model_priority else 'Legacy'}")
+        
         # Use centralized cache manager
         from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
         self.cache_manager = CacheManager
@@ -137,6 +165,49 @@ class MobileMLModel:
         except Exception as e:
             raise Exception(f"Failed to download model from Google Drive: {str(e)}")
     
+    def _download_raw_model(self, drive_url, model_path, model_type):
+        """Download raw model from Google Drive"""
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            
+            print(f"📥 Downloading {model_type} raw model from Google Drive...")
+            
+            # Extract file ID from URL
+            if 'drive.google.com/uc?id=' in drive_url:
+                file_id = drive_url.split('id=')[1].split('&')[0]
+            else:
+                raise Exception(f"Invalid Google Drive URL format: {drive_url}")
+            
+            # Use direct download URL with confirmation
+            download_url = f"https://drive.usercontent.google.com/download?id={file_id}&confirm=t"
+            
+            session = requests.Session()
+            response = session.get(download_url, stream=True, timeout=300, allow_redirects=True)
+            response.raise_for_status()
+            
+            # Check content type
+            content_type = response.headers.get('content-type', '')
+            if 'text/html' in content_type:
+                raise Exception(f"Got HTML page instead of file - virus scan may be blocking download")
+            
+            with open(model_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+            
+            # Verify file size
+            file_size = os.path.getsize(model_path)
+            if file_size < 1000:
+                raise Exception(f"Downloaded file too small ({file_size} bytes)")
+            
+            print(f"✅ {model_type.title()} raw model downloaded successfully ({file_size:,} bytes)")
+            
+        except Exception as e:
+            if os.path.exists(model_path):
+                os.remove(model_path)
+            raise Exception(f"Failed to download {model_type} raw model: {str(e)}")
+    
     async def predict(self, symbol, timeframe='1D'):
         """Generate real model prediction with Redis caching"""
         import time
@@ -179,6 +250,24 @@ class MobileMLModel:
         
         async with self.prediction_semaphore:
             print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
+            
+            # Try raw models first if priority is set
+            if self.raw_model_priority and self.use_raw_models:
+                try:
+                    raw_result = await self._predict_with_raw_models(symbol, timeframe)
+                    if raw_result:
+                        print(f"✅ [RAW-PRIMARY] {symbol}:{timeframe} using raw models", flush=True)
+                        # Cache the result
+                        ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
+                        self.cache_manager.set_cache(cache_key, raw_result, ttl)
+                        self.prediction_cache[symbol] = (start_time, raw_result)
+                        return raw_result
+                except Exception as raw_e:
+                    print(f"⚠️ [RAW-PRIMARY-FAILED] {symbol}:{timeframe}: {raw_e}", flush=True)
+            
+            # Use legacy model if enabled
+            if not self.use_legacy_model:
+                raise Exception("Legacy model disabled, trying raw models only")
             
             try:
                 # Get real data with faster timeout
@@ -367,6 +456,21 @@ class MobileMLModel:
             except Exception as e:
                 total_time = (time.time() - start_time) * 1000
                 print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
+                
+                # Try raw models as fallback if enabled
+                if self.use_raw_models and not self.raw_model_priority:
+                    try:
+                        raw_result = await self._predict_with_raw_models(symbol, timeframe)
+                        if raw_result:
+                            print(f"✅ [RAW-FALLBACK] {symbol}:{timeframe} using raw models", flush=True)
+                            # Cache the fallback result
+                            ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
+                            self.cache_manager.set_cache(cache_key, raw_result, ttl)
+                            self.prediction_cache[symbol] = (start_time, raw_result)
+                            return raw_result
+                    except Exception as raw_e:
+                        print(f"❌ [RAW-FALLBACK-FAILED] {symbol}:{timeframe}: {raw_e}", flush=True)
+                
                 raise Exception(f"PREDICTION FAILED: Cannot generate prediction without real market data for {symbol}: {str(e)}")
     
     def predict_for_timestamp(self, symbol, timestamp):
@@ -595,6 +699,8 @@ class MobileMLModel:
                     
         except Exception as e:
             raise Exception(f"Failed to get real historical prices for {symbol}: {e}")
+        
+        return []
     
     def _enhanced_technical_forecast(self, current_price, change_24h, symbol):
         """Enhanced technical analysis for better predictions"""
@@ -650,3 +756,131 @@ class MobileMLModel:
                 'confidence': min(90, max(50, 60 + abs(change_24h) * 2)),
                 'trend_score': int(change_24h / 2) if abs(change_24h) > 1 else 0
             }
+    
+    async def _predict_with_raw_models(self, symbol, timeframe='1D'):
+        """Predict using new raw models (crypto/stock)"""
+        try:
+            # Check if raw models are enabled
+            if not self.use_raw_models:
+                return None
+            
+            # Determine asset type and select appropriate model
+            if symbol in CRYPTO_SYMBOLS and self.crypto_raw_models:
+                models = self.crypto_raw_models
+                asset_type = 'crypto'
+            elif symbol in STOCK_SYMBOLS and self.stock_raw_models:
+                models = self.stock_raw_models
+                asset_type = 'stock'
+            else:
+                return None
+            
+            # Check if symbol and timeframe exist in models
+            if symbol not in models or timeframe not in models[symbol]:
+                return None
+            
+            model_data = models[symbol][timeframe]
+            required_keys = ['price_model', 'high_model', 'low_model', 'confidence_model', 'scaler', 'features']
+            if not all(key in model_data for key in required_keys):
+                return None
+            
+            # Get current market data
+            current_price = await self._get_real_price(symbol)
+            change_24h = await self._get_real_change(symbol)
+            
+            if not current_price:
+                return None
+            
+            # Calculate raw features for the model
+            features = await self._calculate_raw_features(symbol, current_price, asset_type)
+            if features is None:
+                return None
+            
+            # Create feature vector matching model expectations
+            feature_vector = np.zeros(len(model_data['features']))
+            for i, feature_name in enumerate(model_data['features']):
+                if feature_name in features:
+                    value = features[feature_name]
+                    feature_vector[i] = float(value) if not pd.isna(value) else 0.0
+            
+            # Scale features and predict
+            features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
+            
+            price_change = model_data['price_model'].predict(features_scaled)[0]
+            range_high = model_data['high_model'].predict(features_scaled)[0]
+            range_low = model_data['low_model'].predict(features_scaled)[0]
+            confidence = model_data['confidence_model'].predict(features_scaled)[0]
+            
+            # Clip predictions to reasonable ranges
+            price_change = np.clip(price_change, -0.1, 0.1)
+            confidence = np.clip(confidence, 60, 95)
+            
+            predicted_price = current_price * (1 + price_change)
+            
+            # Determine direction
+            if price_change > 0.003:
+                direction = 'UP'
+            elif price_change < -0.003:
+                direction = 'DOWN'
+            else:
+                direction = 'HOLD'
+            
+            return {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'current_price': round(current_price, 2),
+                'predicted_price': round(predicted_price, 2),
+                'forecast_direction': direction,
+                'confidence': int(confidence),
+                'change_24h': round(change_24h, 2),
+                'data_source': f'Raw {asset_type.title()} Model'
+            }
+            
+        except Exception as e:
+            print(f"Raw model prediction failed for {symbol}: {e}")
+            return None
+    
+    async def _calculate_raw_features(self, symbol, current_price, asset_type):
+        """Calculate raw features for new models"""
+        try:
+            # Get historical prices
+            historical_prices = self._get_real_historical_prices(symbol)
+            if not historical_prices or len(historical_prices) < 20:
+                return None
+            
+            # Convert to pandas series for calculations
+            import pandas as pd
+            prices = pd.Series(historical_prices + [current_price])
+            
+            # Calculate technical indicators
+            sma_5 = prices.rolling(5).mean().iloc[-1]
+            sma_20 = prices.rolling(20).mean().iloc[-1]
+            
+            returns = prices.pct_change()
+            returns_5 = prices.pct_change(5)
+            
+            # RSI calculation
+            delta = prices.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            rsi = (100 - (100 / (1 + rs))).iloc[-1]
+            
+            momentum_7 = (prices.iloc[-1] / prices.iloc[-8]) if len(prices) >= 8 else 1.0
+            volatility = returns.rolling(10).std().iloc[-1]
+            
+            # Handle NaN values
+            features = {
+                'price_sma5_ratio': (current_price / sma_5) if pd.notna(sma_5) and sma_5 > 0 else 1.0,
+                'price_sma20_ratio': (current_price / sma_20) if pd.notna(sma_20) and sma_20 > 0 else 1.0,
+                'returns': returns.iloc[-1] if pd.notna(returns.iloc[-1]) else 0.0,
+                'returns_5': returns_5.iloc[-1] if pd.notna(returns_5.iloc[-1]) else 0.0,
+                'rsi': rsi if pd.notna(rsi) else 50.0,
+                'momentum_7': momentum_7 if pd.notna(momentum_7) else 1.0,
+                'volatility': volatility if pd.notna(volatility) else 0.02
+            }
+            
+            return features
+            
+        except Exception as e:
+            print(f"Feature calculation failed for {symbol}: {e}")
+            return None

@@ -20,3 +20,16 @@ config/rate_limits.py
 postman
 Admin_Routes.postman_collection.json
 mobile_ui.html
+test_stock_model_raw.py
+gemini_predictor.py
+test_crypto_model_raw.py
+train_crypto_model_raw.py
+train_macro_model.py
+train_stock_model_raw.py
+use_trained_models.py
+mobile_ui.html
+test_localhost.html
+trading_charts.html
+all_symbols_all_intervals.csv
+crypto_raw_models.pkl
+stock_raw_models.pkl
