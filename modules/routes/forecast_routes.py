@@ -59,21 +59,9 @@ def setup_forecast_routes(app: FastAPI, model, database):
             future_prices = [predicted_price]  # Only next expected value
             future_timestamps = [(datetime.now() + timedelta(days=freq_info['days'])).isoformat()]
         else:
-            # Regular daily projections for crypto/stocks
-            future_prices = []
-            future_timestamps = []
-            
-            for i in range(7):
-                timestamp = datetime.now() + timedelta(days=i + 1)
-                if forecast_direction == 'UP':
-                    future_price = predicted_price * (1 + (i + 1) * 0.01)
-                elif forecast_direction == 'DOWN':
-                    future_price = predicted_price * (1 - (i + 1) * 0.01)
-                else:
-                    future_price = predicted_price
-                
-                future_prices.append(round(future_price, 2))
-                future_timestamps.append(timestamp.isoformat())
+            # Use model's predicted price only (no synthetic future projections)
+            future_prices = [predicted_price]
+            future_timestamps = [datetime.now().isoformat()]
         
         response = {
             "symbol": symbol,

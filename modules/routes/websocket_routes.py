@@ -174,26 +174,17 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     past_prices = []
                     timestamps = []
                 
-                # Generate future predictions
+                # Use only model's prediction (no synthetic future)
                 current_price = prediction.get('current_price', 0)
                 predicted_price = prediction.get('predicted_price', current_price)
                 forecast_direction = prediction.get('forecast_direction', 'HOLD')
                 
-                future_prices = []
-                for i in range(7):
-                    if forecast_direction == 'UP':
-                        future_price = predicted_price * (1 + (i + 1) * 0.001)
-                    elif forecast_direction == 'DOWN':
-                        future_price = predicted_price * (1 - (i + 1) * 0.001)
-                    else:
-                        future_price = predicted_price
-                    future_prices.append(round(future_price, 2))
+                # Only show model's actual prediction
+                future_prices = [predicted_price]
                 
-                # Generate future timestamps
+                # Single future timestamp
                 from datetime import timedelta
-                last_timestamp = WebSocketSecurity.get_utc_now()
-                for i in range(7):
-                    timestamps.append((last_timestamp + timedelta(days=i+1)).isoformat())
+                timestamps.append(WebSocketSecurity.get_utc_now().isoformat())
                 
                 # Check if macro indicator
                 macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']

@@ -60,13 +60,9 @@ def setup_market_routes(app: FastAPI, model, database):
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 75,
-                            'predicted_price': price_data['current_price']
-                        }
+                        continue
                     
-                    # Use real model range values if available
+                    # Use real model range values
                     current_price = price_data['current_price']
                     range_low = prediction.get('range_low')
                     range_high = prediction.get('range_high')
@@ -88,9 +84,9 @@ def setup_market_routes(app: FastAPI, model, database):
                         'current_price': price_data['current_price'],
                         'change_24h': price_data.get('change_24h', 0),
                         'volume': price_data.get('volume', 0),
-                        'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
-                        'confidence': prediction.get('confidence', 75),
-                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'forecast_direction': prediction['forecast_direction'],
+                        'confidence': prediction['confidence'],
+                        'predicted_price': prediction['predicted_price'],
                         'predicted_range': predicted_range,
                         'asset_class': 'crypto',
                         'timeframe': '1D'
@@ -118,13 +114,9 @@ def setup_market_routes(app: FastAPI, model, database):
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 75,
-                            'predicted_price': price_data['current_price']
-                        }
+                        continue
                     
-                    # Use real model range values if available
+                    # Use real model range values
                     current_price = price_data['current_price']
                     range_low = prediction.get('range_low')
                     range_high = prediction.get('range_high')
@@ -141,9 +133,9 @@ def setup_market_routes(app: FastAPI, model, database):
                         'current_price': price_data['current_price'],
                         'change_24h': price_data.get('change_24h', 0),
                         'volume': price_data.get('volume', 0),
-                        'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
-                        'confidence': prediction.get('confidence', 75),
-                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'forecast_direction': prediction['forecast_direction'],
+                        'confidence': prediction['confidence'],
+                        'predicted_price': prediction['predicted_price'],
                         'predicted_range': predicted_range,
                         'asset_class': 'stocks',
                         'timeframe': '1D'
@@ -174,11 +166,7 @@ def setup_market_routes(app: FastAPI, model, database):
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 75,
-                            'predicted_price': price_data['current_price']
-                        }
+                        continue
                     
                     # Define update frequencies for macro indicators
                     macro_frequencies = {
@@ -189,7 +177,7 @@ def setup_market_routes(app: FastAPI, model, database):
                         'CONSUMER_CONFIDENCE': 'Monthly'
                     }
                     
-                    # Use real model range values if available
+                    # Use real model range values
                     range_low = prediction.get('range_low')
                     range_high = prediction.get('range_high')
                     
@@ -209,9 +197,9 @@ def setup_market_routes(app: FastAPI, model, database):
                         'name': multi_asset.get_asset_name(symbol),
                         'current_price': price_data['current_price'],
                         'change_24h': price_data.get('change_24h', 0),
-                        'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
-                        'confidence': prediction.get('confidence', 75),
-                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'forecast_direction': prediction['forecast_direction'],
+                        'confidence': prediction['confidence'],
+                        'predicted_price': prediction['predicted_price'],
                         'predicted_range': predicted_range,
                         'asset_class': 'macro',
                         'timeframe': '1D',
@@ -251,11 +239,7 @@ def setup_market_routes(app: FastAPI, model, database):
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 75,
-                            'predicted_price': price_data['current_price']
-                        }
+                        continue
                     
                     # Define update frequencies for macro indicators
                     macro_frequencies = {
@@ -266,7 +250,7 @@ def setup_market_routes(app: FastAPI, model, database):
                         'CONSUMER_CONFIDENCE': 'Monthly'
                     }
                     
-                    # Use real model range values if available
+                    # Use real model range values
                     current_price = price_data['current_price']
                     range_low = prediction.get('range_low')
                     range_high = prediction.get('range_high')
@@ -298,9 +282,9 @@ def setup_market_routes(app: FastAPI, model, database):
                         'name': multi_asset.get_asset_name(symbol),
                         'current_price': price_data['current_price'],
                         'change_24h': price_data.get('change_24h', 0),
-                        'forecast_direction': prediction.get('forecast_direction', 'HOLD'),
-                        'confidence': prediction.get('confidence', 75),
-                        'predicted_price': prediction.get('predicted_price', price_data['current_price']),
+                        'forecast_direction': prediction['forecast_direction'],
+                        'confidence': prediction['confidence'],
+                        'predicted_price': prediction['predicted_price'],
                         'predicted_range': predicted_range,
                         'asset_class': asset_class,
                         'timeframe': '1D'

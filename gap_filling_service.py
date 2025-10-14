@@ -385,24 +385,49 @@ class GapFillingService:
             return []
     
     async def _generate_ml_predictions(self, data: List[Dict], symbol: str, timeframe: str, asset_class: str) -> List[Dict]:
-        """Generate ML predictions using XGBoost model with complete historical technical indicators"""
+        """Generate ML predictions using raw models (crypto/stock) or specialized model (macro)"""
         predictions = []
         
-        if not self.model or not hasattr(self.model, 'xgb_model') or len(data) < 20:
+        if not self.model or len(data) < 20:
             return predictions
+        
+        # Use raw models for crypto/stocks, specialized for macro
+        use_raw_models = asset_class in ['crypto', 'stocks']
         
         for i in range(30, len(data)):
             try:
-                # Get historical data UP TO this point only (no future data)
                 hist_prices = np.array([d['close'] for d in data[max(0, i-30):i]])
-                hist_highs = np.array([d['high'] for d in data[max(0, i-30):i]])
-                hist_lows = np.array([d['low'] for d in data[max(0, i-30):i]])
-                hist_volumes = np.array([d['volume'] for d in data[max(0, i-30):i]])
-                
                 if len(hist_prices) < 20:
                     continue
                 
                 current_price = hist_prices[-1]
+                
+                # Use raw models for crypto/stocks
+                if use_raw_models:
+                    prediction_result = await self._predict_with_raw_models_historical(
+                        symbol, timeframe, current_price, hist_prices, asset_class
+                    )
+                    if not prediction_result:
+                        continue
+                    
+                    predictions.append({
+                        'timestamp': data[i-1]['timestamp'],
+                        'actual_price': current_price,
+                        'predicted_price': prediction_result['predicted_price'],
+                        'range_low': prediction_result.get('range_low', current_price * 0.98),
+                        'range_high': prediction_result.get('range_high', current_price * 1.02),
+                        'forecast_direction': prediction_result['forecast_direction'],
+                        'confidence': prediction_result['confidence'],
+                        'trend_score': int((prediction_result['predicted_price'] - current_price) / current_price * 100),
+                        'rsi': 50,
+                        'volatility': 0.02
+                    })
+                    continue
+                
+                # Use specialized model for macro indicators
+                hist_highs = np.array([d['high'] for d in data[max(0, i-30):i]])
+                hist_lows = np.array([d['low'] for d in data[max(0, i-30):i]])
+                hist_volumes = np.array([d['volume'] for d in data[max(0, i-30):i]])
                 
                 # Calculate ALL technical indicators from real historical data
                 # 1. Returns (log returns)
@@ -529,6 +554,96 @@ class GapFillingService:
                 continue
         
         return predictions
+    
+    async def _predict_with_raw_models_historical(self, symbol, timeframe, current_price, hist_prices, asset_class):
+        """Use raw models for historical predictions"""
+        try:
+            # Select appropriate model
+            if asset_class == 'crypto' and self.model.crypto_raw_models:
+                models = self.model.crypto_raw_models
+            elif asset_class == 'stocks' and self.model.stock_raw_models:
+                models = self.model.stock_raw_models
+            else:
+                return None
+            
+            if symbol not in models or timeframe not in models[symbol]:
+                return None
+            
+            model_data = models[symbol][timeframe]
+            
+            # Calculate features from historical data
+            df = pd.DataFrame({'close': hist_prices})
+            df['sma_5'] = df['close'].rolling(5).mean()
+            df['sma_20'] = df['close'].rolling(20).mean()
+            df['price_sma5_ratio'] = df['close'] / df['sma_5']
+            df['price_sma20_ratio'] = df['close'] / df['sma_20']
+            df['returns'] = df['close'].pct_change()
+            df['returns_5'] = df['close'].pct_change(5)
+            
+            delta = df['close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
+            
+            df['momentum_7'] = df['close'] / df['close'].shift(7)
+            df['volatility'] = df['returns'].rolling(10).std()
+            
+            latest = df.iloc[-1]
+            features = {
+                'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
+                'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
+                'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
+                'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
+                'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
+                'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
+                'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
+            }
+            
+            # Create feature vector
+            feature_vector = np.zeros(len(model_data['features']))
+            for i, feature_name in enumerate(model_data['features']):
+                feature_vector[i] = features.get(feature_name, 0.0)
+            
+            # Scale and predict
+            features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
+            price_change = model_data['price_model'].predict(features_scaled)[0]
+            range_high = model_data['high_model'].predict(features_scaled)[0]
+            range_low = model_data['low_model'].predict(features_scaled)[0]
+            confidence = model_data['confidence_model'].predict(features_scaled)[0]
+            
+            # Clip predictions
+            if asset_class == 'crypto':
+                price_change = np.clip(price_change, -0.15, 0.15)
+                range_high = np.clip(range_high, -0.1, 0.2)
+                range_low = np.clip(range_low, -0.2, 0.1)
+            else:
+                price_change = np.clip(price_change, -0.1, 0.1)
+                range_high = np.clip(range_high, -0.05, 0.1)
+                range_low = np.clip(range_low, -0.1, 0.05)
+            
+            confidence = np.clip(confidence, 60, 95)
+            
+            predicted_price = current_price * (1 + price_change)
+            high_price = current_price * (1 + range_high)
+            low_price = current_price * (1 + range_low)
+            
+            if low_price > high_price:
+                low_price, high_price = high_price, low_price
+            
+            threshold = 0.005 if asset_class == 'crypto' else 0.003
+            direction = 'UP' if price_change > threshold else 'DOWN' if price_change < -threshold else 'HOLD'
+            
+            return {
+                'predicted_price': predicted_price,
+                'range_low': low_price,
+                'range_high': high_price,
+                'forecast_direction': direction,
+                'confidence': int(confidence)
+            }
+            
+        except Exception as e:
+            return None
     
     def _calculate_accuracy(self, predictions: List[Dict]) -> List[Dict]:
         """Calculate accuracy by comparing predictions with next actual prices"""
