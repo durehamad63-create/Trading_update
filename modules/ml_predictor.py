@@ -63,8 +63,7 @@ class MobileMLModel:
                 raise Exception(f"Model file too small ({file_size} bytes), download may have failed")
             
             self.mobile_model = joblib.load(model_path)
-            print(f"Model loaded successfully from {model_path} ({file_size} bytes)")
-            pass
+            print(f"✅ Specialized model loaded from {model_path} ({file_size} bytes)")
             
             # Store all timeframe models
             if hasattr(self.mobile_model, 'models'):
@@ -74,26 +73,10 @@ class MobileMLModel:
                     crypto_1d = self.timeframe_models['Crypto'].get('1D', {})
                     self.xgb_model = crypto_1d.get('model')
                     self.model_features = crypto_1d.get('features', [])
-                pass
             else:
                 raise Exception("Specialized model structure not found")
         except Exception as e:
-            print(f"Model loading failed: {str(e)}")
-            if "timeout" in str(e).lower() or "60" in str(e):
-                print("Timeout detected - trying gdown alternative...")
-                try:
-                    import subprocess
-                    import sys
-                    subprocess.run([sys.executable, "-m", "pip", "install", "gdown"], check=True, capture_output=True)
-                    import gdown
-                    file_id = "10uBJLKsijJHDFBOhCsyFFi-1DAhamjez"
-                    gdown.download(f"https://drive.google.com/uc?id={file_id}", model_path, quiet=False, fuzzy=True)
-                    self.mobile_model = joblib.load(model_path)
-                    print("Model loaded successfully using gdown")
-                except Exception as alt_error:
-                    raise Exception(f"Cannot start: Both download methods failed - {str(e)}")
-            else:
-                raise Exception(f"Cannot start: {str(e)}")
+            raise Exception(f"❌ CRITICAL: Specialized model failed to load: {str(e)}")
         
         # Load new raw models - ALWAYS use raw models for crypto/stocks
         self.use_legacy_model = os.getenv('USE_LEGACY_MODEL', 'false').lower() == 'true'
@@ -105,27 +88,25 @@ class MobileMLModel:
         
         # Load crypto raw models (REQUIRED for crypto predictions)
         crypto_model_path = 'models/crypto_raw/crypto_raw_models.pkl'
-        if os.path.exists(crypto_model_path):
-            try:
-                self.crypto_raw_models = joblib.load(crypto_model_path)
-                print(f"✅ Crypto raw models loaded from {crypto_model_path}")
-            except Exception as e:
-                print(f"❌ Crypto raw models failed to load: {e}")
-        else:
-            print(f"⚠️ Crypto raw models not found at {crypto_model_path}")
-            print(f"🛠️ Run 'python train_crypto_model_raw.py' to train models")
+        if not os.path.exists(crypto_model_path):
+            raise Exception(f"❌ CRITICAL: Crypto raw models not found at {crypto_model_path}\n🛠️ Run 'python train_crypto_model_raw.py' to train models")
+        
+        try:
+            self.crypto_raw_models = joblib.load(crypto_model_path)
+            print(f"✅ Crypto raw models loaded from {crypto_model_path}")
+        except Exception as e:
+            raise Exception(f"❌ CRITICAL: Crypto raw models failed to load: {e}")
         
         # Load stock raw models (REQUIRED for stock predictions)
         stock_model_path = 'models/stock_raw/stock_raw_models.pkl'
-        if os.path.exists(stock_model_path):
-            try:
-                self.stock_raw_models = joblib.load(stock_model_path)
-                print(f"✅ Stock raw models loaded from {stock_model_path}")
-            except Exception as e:
-                print(f"❌ Stock raw models failed to load: {e}")
-        else:
-            print(f"⚠️ Stock raw models not found at {stock_model_path}")
-            print(f"🛠️ Run 'python train_stock_model_raw.py' to train models")
+        if not os.path.exists(stock_model_path):
+            raise Exception(f"❌ CRITICAL: Stock raw models not found at {stock_model_path}\n🛠️ Run 'python train_stock_model_raw.py' to train models")
+        
+        try:
+            self.stock_raw_models = joblib.load(stock_model_path)
+            print(f"✅ Stock raw models loaded from {stock_model_path}")
+        except Exception as e:
+            raise Exception(f"❌ CRITICAL: Stock raw models failed to load: {e}")
         
         print(f"🔧 Model Configuration: Legacy={self.use_legacy_model}, Raw={self.use_raw_models}, Priority={'Raw' if self.raw_model_priority else 'Legacy'}")
         
@@ -221,44 +202,26 @@ class MobileMLModel:
         """Generate real model prediction with Redis caching"""
         import time
         start_time = time.time()
-        print(f"🔍 [PREDICT-START] {symbol}:{timeframe} at {start_time:.3f}", flush=True)
         
         cache_key = self.cache_keys.prediction(symbol, timeframe)
-        
-        # Check cache using centralized manager
-        cache_start = time.time()
         cached_data = self.cache_manager.get_cache(cache_key)
-        cache_time = (time.time() - cache_start) * 1000
         
         if cached_data:
-            print(f"✅ [CACHE-HIT] {symbol}:{timeframe} in {cache_time:.1f}ms", flush=True)
             return cached_data
-        else:
-            print(f"❌ [CACHE-MISS] {symbol}:{timeframe} after {cache_time:.1f}ms", flush=True)
         
         # Rate limiting for real-time updates
         if symbol in self.last_request_time:
             time_since_last = start_time - self.last_request_time[symbol]
             if time_since_last < self.min_request_interval:
-                # Return memory cached result if available
                 if symbol in self.prediction_cache:
                     cache_time, cached_result = self.prediction_cache[symbol]
-                    if start_time - cache_time < 2.0:  # 2s memory cache
-                        print(f"✅ [MEM-CACHE-HIT] {symbol}:{timeframe} from rate limit ({time_since_last*1000:.1f}ms)", flush=True)
+                    if start_time - cache_time < 2.0:
                         return cached_result
-                # If no cache, wait to avoid overload
                 await asyncio.sleep(self.min_request_interval - time_since_last)
-                print(f"⏳ [RATE-WAIT] {symbol}:{timeframe} waited {(self.min_request_interval - time_since_last)*1000:.1f}ms", flush=True)
         
         self.last_request_time[symbol] = start_time
         
-        # Limit concurrent predictions to prevent API overload
-        queue_size = 5 - self.prediction_semaphore._value
-        if queue_size > 0:
-            print(f"⏳ [QUEUE-WAIT] {symbol}:{timeframe} - {queue_size} predictions running", flush=True)
-        
         async with self.prediction_semaphore:
-            print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
             
             # Determine asset class
             asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
@@ -268,14 +231,11 @@ class MobileMLModel:
                 try:
                     raw_result = await self._predict_with_raw_models(symbol, timeframe)
                     if raw_result:
-                        print(f"✅ [RAW-MODEL] {symbol}:{timeframe} using raw {asset_class.lower()} model", flush=True)
-                        # Cache the result
                         ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
                         self.cache_manager.set_cache(cache_key, raw_result, ttl)
                         self.prediction_cache[symbol] = (start_time, raw_result)
                         return raw_result
                 except Exception as raw_e:
-                    print(f"❌ [RAW-MODEL-FAILED] {symbol}:{timeframe}: {raw_e}", flush=True)
                     raise Exception(f"Raw model prediction failed for {symbol}: {raw_e}")
             
             # Use specialized model only for macro indicators
@@ -287,38 +247,21 @@ class MobileMLModel:
                 price_start = time.time()
                 try:
                     real_price = await asyncio.wait_for(self._get_real_price(symbol), timeout=2.0)
-                    price_time = (time.time() - price_start) * 1000
                     if not real_price:
-                        print(f"❌ [PRICE-FAIL] {symbol}:{timeframe} after {price_time:.1f}ms - No data", flush=True)
                         raise Exception("No price data available")
-                    print(f"✅ [PRICE-OK] {symbol}:{timeframe} in {price_time:.1f}ms = ${real_price}", flush=True)
                 except (asyncio.TimeoutError, Exception) as e:
-                    price_time = (time.time() - price_start) * 1000
-                    print(f"❌ [PRICE-TIMEOUT] {symbol}:{timeframe} after {price_time:.1f}ms: {e}", flush=True)
                     raise Exception(f"Failed to get real price data for {symbol}: {e}")
                 
                 current_price = real_price
-                change_start = time.time()
                 try:
                     change_24h = await asyncio.wait_for(self._get_real_change(symbol), timeout=1.0)
-                    change_time = (time.time() - change_start) * 1000
                     data_source = 'ML Analysis'
-                    print(f"✅ [CHANGE-OK] {symbol}:{timeframe} in {change_time:.1f}ms = {change_24h}%", flush=True)
                 except (asyncio.TimeoutError, Exception) as e:
-                    change_time = (time.time() - change_start) * 1000
-                    print(f"❌ [CHANGE-FAIL] {symbol}:{timeframe} after {change_time:.1f}ms: {e}", flush=True)
                     raise Exception(f"Failed to get 24h change for {symbol}: {e}")
             
-                # Get real historical prices for feature engineering
-                hist_start = time.time()
                 real_prices = self._get_real_historical_prices(symbol)
-                hist_time = (time.time() - hist_start) * 1000
-                
                 if not real_prices or len(real_prices) < 10:
-                    print(f"❌ [HIST-FAIL] {symbol}:{timeframe} after {hist_time:.1f}ms - got {len(real_prices) if real_prices else 0} points", flush=True)
                     raise Exception(f"Insufficient historical price data for {symbol}: need at least 10 points, got {len(real_prices) if real_prices else 0}")
-                
-                print(f"✅ [HIST-OK] {symbol}:{timeframe} in {hist_time:.1f}ms - got {len(real_prices)} points", flush=True)
             
                 # Ensure current price is the latest
                 real_prices.append(current_price)
@@ -450,25 +393,12 @@ class MobileMLModel:
                     'data_source': data_source
                 }
                 
-                # Cache using centralized manager
                 ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
-                
-                cache_store_start = time.time()
                 self.cache_manager.set_cache(cache_key, result, ttl)
-                cache_store_time = (time.time() - cache_store_start) * 1000
-                print(f"✅ [CACHE-SET] {cache_key} in {cache_store_time:.1f}ms", flush=True)
-                
-                # Cache the result in memory
                 self.prediction_cache[symbol] = (start_time, result)
-                
-                total_time = (time.time() - start_time) * 1000
-                print(f"✅ [PREDICT-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (specialized model)", flush=True)
-                
                 return result
             
             except Exception as e:
-                total_time = (time.time() - start_time) * 1000
-                print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
                 raise Exception(f"Specialized model prediction failed for {symbol}: {str(e)}")
     
     def predict_for_timestamp(self, symbol, timestamp):
@@ -855,11 +785,9 @@ class MobileMLModel:
                 'data_source': f'Raw {asset_type.title()} Model'
             }
             
-            print(f"✅ [RAW-PREDICT] {symbol}:{timeframe} {direction} ({price_change*100:+.2f}%) -> ${predicted_price:.2f} | Range: ${low_price:.2f}–${high_price:.2f} | Conf: {confidence:.0f}%", flush=True)
             return result
             
         except Exception as e:
-            print(f"❌ [RAW-PREDICT-ERROR] {symbol}:{timeframe}: {e}", flush=True)
             raise
     
     async def _calculate_raw_features(self, symbol, current_price, asset_type):
