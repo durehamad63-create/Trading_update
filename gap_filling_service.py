@@ -415,7 +415,7 @@ class GapFillingService:
                         continue
                     
                     predictions.append({
-                        'timestamp': data[i-1]['timestamp'],
+                        'timestamp': data[i]['timestamp'],  # FIXED: Use future timestamp being predicted
                         'actual_price': current_price,
                         'predicted_price': prediction_result['predicted_price'],
                         'range_low': prediction_result['range_low'],
@@ -544,7 +544,7 @@ class GapFillingService:
                 confidence = max(50, min(95, int(75 + prediction_strength - volatility * 100)))
                 
                 predictions.append({
-                    'timestamp': data[i-1]['timestamp'],  # Fixed: use i-1 to match actual data used
+                    'timestamp': data[i]['timestamp'],  # FIXED: Use future timestamp being predicted
                     'actual_price': current_price,
                     'predicted_price': predicted_price,
                     'forecast_direction': forecast_direction,

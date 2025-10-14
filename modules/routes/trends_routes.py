@@ -41,27 +41,31 @@ def setup_trends_routes(app: FastAPI, model, database):
         async with database.pool.acquire() as conn:
             db_symbol = symbol_manager.get_db_key(symbol, db_timeframe)
             
-            actual_data = await conn.fetch(
-                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 50",
-                db_symbol
-            )
+            # Join actual and predicted data by timestamp
+            rows = await conn.fetch("""
+                SELECT 
+                    a.price as actual_price,
+                    a.timestamp,
+                    f.predicted_price
+                FROM actual_prices a
+                LEFT JOIN forecasts f ON f.symbol = a.symbol 
+                    AND DATE_TRUNC('day', f.created_at) = DATE_TRUNC('day', a.timestamp)
+                WHERE a.symbol = $1
+                ORDER BY a.timestamp ASC
+                LIMIT 50
+            """, db_symbol)
             
-            pred_data = await conn.fetch(
-                "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 AND predicted_price IS NOT NULL ORDER BY created_at DESC LIMIT 50",
-                db_symbol
-            )
-            
-            if not actual_data:
+            if not rows:
                 return {'error': 'No historical data available'}
             
-            for i, record in enumerate(reversed(actual_data)):
-                price = float(record['price'])
+            for record in rows:
+                price = float(record['actual_price'])
                 if data_validator.validate_price(symbol, price):
                     actual_prices.append(price)
                     timestamps.append(record['timestamp'].isoformat())
                     
-                    if i < len(pred_data) and pred_data[i]['predicted_price']:
-                        predicted_prices.append(float(pred_data[i]['predicted_price']))
+                    if record['predicted_price']:
+                        predicted_prices.append(float(record['predicted_price']))
                     else:
                         predicted_prices.append(None)
         
