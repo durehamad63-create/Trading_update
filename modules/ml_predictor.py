@@ -707,6 +707,9 @@ class MobileMLModel:
             elif symbol in STOCK_SYMBOLS and self.stock_raw_models:
                 models = self.stock_raw_models
                 asset_type = 'stock'
+                # Map API timeframes to trained model keys
+                timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
+                timeframe = timeframe_map.get(timeframe, timeframe)
             else:
                 raise Exception(f"No raw models available for {symbol}")
             
