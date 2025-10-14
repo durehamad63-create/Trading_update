@@ -26,7 +26,7 @@ class GapFillingService:
         self.all_symbols = self.crypto_symbols + self.stock_symbols + self.macro_symbols
         
         # Only native API intervals - no synthetic aggregation
-        self.crypto_timeframes = ['1h', '4H', '1D', '1W', '1M']  # Binance native
+        self.crypto_timeframes = ['1h', '4h', '1D', '1W', '1M']  # Binance native
         self.stock_timeframes = ['1h', '1D', '1W', '1M']  # Yahoo native (removed 4H, 7D)
         self.macro_timeframes = ['1D', '1W', '1M']  # FRED native (removed 7D)
         
@@ -36,13 +36,13 @@ class GapFillingService:
         # Binance mapping for stablecoins
         self.binance_mapping = {'USDT': 'BTCUSDT', 'USDC': 'BTCUSDT'}
         self.binance_intervals = {
-            '1h': '1h', '4H': '4h', '1D': '1d', '7D': '1w', '1W': '1w', '1M': '1M'
+            '1h': '1h', '4h': '4h', '1D': '1d', '7D': '1w', '1W': '1w', '1M': '1M'
         }
         
         # Time intervals for proper data storage (avoid storing every second)
         self.storage_intervals = {
             '1h': timedelta(hours=1),
-            '4H': timedelta(hours=4), 
+            '4h': timedelta(hours=4), 
             '1D': timedelta(days=1),
             '7D': timedelta(days=7),
             '1W': timedelta(weeks=1),
