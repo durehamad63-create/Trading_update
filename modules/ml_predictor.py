@@ -89,24 +89,34 @@ class MobileMLModel:
         # Load crypto raw models (REQUIRED for crypto predictions)
         crypto_model_path = 'models/crypto_raw/crypto_raw_models.pkl'
         if not os.path.exists(crypto_model_path):
-            raise Exception(f"❌ CRITICAL: Crypto raw models not found at {crypto_model_path}\n🛠️ Run 'python train_crypto_model_raw.py' to train models")
+            crypto_url = os.getenv('CRYPTO_RAW_MODEL_URL')
+            if crypto_url:
+                print(f"📥 Downloading crypto raw models...")
+                self._download_raw_model(crypto_url, crypto_model_path, 'crypto')
+            else:
+                raise Exception(f"❌ CRITICAL: Crypto raw models not found")
         
         try:
             self.crypto_raw_models = joblib.load(crypto_model_path)
-            print(f"✅ Crypto raw models loaded from {crypto_model_path}")
+            print(f"✅ Crypto raw models loaded")
         except Exception as e:
-            raise Exception(f"❌ CRITICAL: Crypto raw models failed to load: {e}")
+            raise Exception(f"❌ CRITICAL: Crypto raw models failed: {e}")
         
         # Load stock raw models (REQUIRED for stock predictions)
         stock_model_path = 'models/stock_raw/stock_raw_models.pkl'
         if not os.path.exists(stock_model_path):
-            raise Exception(f"❌ CRITICAL: Stock raw models not found at {stock_model_path}\n🛠️ Run 'python train_stock_model_raw.py' to train models")
+            stock_url = os.getenv('STOCK_RAW_MODEL_URL')
+            if stock_url:
+                print(f"📥 Downloading stock raw models...")
+                self._download_raw_model(stock_url, stock_model_path, 'stock')
+            else:
+                raise Exception(f"❌ CRITICAL: Stock raw models not found")
         
         try:
             self.stock_raw_models = joblib.load(stock_model_path)
-            print(f"✅ Stock raw models loaded from {stock_model_path}")
+            print(f"✅ Stock raw models loaded")
         except Exception as e:
-            raise Exception(f"❌ CRITICAL: Stock raw models failed to load: {e}")
+            raise Exception(f"❌ CRITICAL: Stock raw models failed: {e}")
         
         print(f"🔧 Model Configuration: Legacy={self.use_legacy_model}, Raw={self.use_raw_models}, Priority={'Raw' if self.raw_model_priority else 'Legacy'}")
         
@@ -164,10 +174,12 @@ class MobileMLModel:
             print(f"📥 Downloading {model_type} raw model from Google Drive...")
             
             # Extract file ID from URL
-            if 'drive.google.com/uc?id=' in drive_url:
+            if '/file/d/' in drive_url:
+                file_id = drive_url.split('/file/d/')[1].split('/')[0]
+            elif 'id=' in drive_url:
                 file_id = drive_url.split('id=')[1].split('&')[0]
             else:
-                raise Exception(f"Invalid Google Drive URL format: {drive_url}")
+                raise Exception(f"Invalid URL: {drive_url}")
             
             # Use direct download URL with confirmation
             download_url = f"https://drive.usercontent.google.com/download?id={file_id}&confirm=t"
