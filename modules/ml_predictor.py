@@ -38,6 +38,7 @@ class MobileMLModel:
         self.xgb_model = None
         self.prediction_cache = {}
         self.cache_ttl = 1  # 1 second cache for real-time updates
+        self.prediction_semaphore = asyncio.Semaphore(5)  # Limit concurrent predictions
         
         # Load models directly - REQUIRED
         try:
@@ -170,9 +171,16 @@ class MobileMLModel:
                 # Don't return None, continue with prediction
         
         self.last_request_time[symbol] = start_time
-        print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
         
-        try:
+        # Limit concurrent predictions to prevent API overload
+        queue_size = 5 - self.prediction_semaphore._value
+        if queue_size > 0:
+            print(f"⏳ [QUEUE-WAIT] {symbol}:{timeframe} - {queue_size} predictions running", flush=True)
+        
+        async with self.prediction_semaphore:
+            print(f"🚀 [PREDICTION-EXECUTING] {symbol}:{timeframe}", flush=True)
+            
+            try:
             # Get real data with faster timeout
             price_start = time.time()
             try:
@@ -357,9 +365,9 @@ class MobileMLModel:
             return result
             
         except Exception as e:
-            total_time = (time.time() - start_time) * 1000
-            print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
-            raise Exception(f"PREDICTION FAILED: Cannot generate prediction without real market data for {symbol}: {str(e)}")
+                total_time = (time.time() - start_time) * 1000
+                print(f"❌ [PREDICT-FAILED] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
+                raise Exception(f"PREDICTION FAILED: Cannot generate prediction without real market data for {symbol}: {str(e)}")
     
     def predict_for_timestamp(self, symbol, timestamp):
         """Generate ML prediction for specific timestamp"""
