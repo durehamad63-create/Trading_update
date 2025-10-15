@@ -508,11 +508,13 @@ class MobileMLModel:
             if symbol in CRYPTO_SYMBOLS and self.crypto_raw_models:
                 models = self.crypto_raw_models
                 asset_type = 'crypto'
+                # Normalize crypto timeframes to lowercase (models trained with lowercase)
+                timeframe = timeframe.lower()
             elif symbol in STOCK_SYMBOLS and self.stock_raw_models:
                 models = self.stock_raw_models
                 asset_type = 'stock'
                 # Map API timeframes to trained model keys
-                timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
+                timeframe_map = {'1h': '60m', '1H': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
                 timeframe = timeframe_map.get(timeframe, timeframe)
             elif symbol in macro_symbols and self.macro_models:
                 models = self.macro_models
@@ -526,7 +528,8 @@ class MobileMLModel:
                 raise Exception(f"Symbol {symbol} not found in {asset_type} raw models")
             
             if timeframe not in models[symbol]:
-                raise Exception(f"Timeframe {timeframe} not found for {symbol} in {asset_type} raw models")
+                available = list(models[symbol].keys())
+                raise Exception(f"Timeframe {timeframe} not found for {symbol} in {asset_type} raw models. Available: {available}")
             
             model_data = models[symbol][timeframe]
             
