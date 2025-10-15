@@ -96,14 +96,16 @@ def setup_trends_routes(app: FastAPI, model, database):
             valid_timestamps.append(timestamps[i])
         
         # Validate only the valid pairs
-        validation = data_validator.validate_accuracy_data(valid_actual, valid_predicted, symbol, timeframe)
+        validation = data_validator.validate_accuracy_data(valid_actual, valid_predicted, symbol, db_timeframe)
         
         if not validation['valid']:
             return {'error': validation.get('error', 'Validation failed')}
         
-        # Calculate accuracy as percentage (100 - error)
-        mean_error = validation['mean_error_pct'] if validation['valid'] else 100
-        accuracy_pct = max(0, min(100, 100 - mean_error))
+        # Calculate accuracy as Hit rate (predictions within 5% error)
+        hits = sum(1 for item in accuracy_history if item['result'] == 'Hit')
+        total = len(accuracy_history)
+        accuracy_pct = (hits / total * 100) if total > 0 else 0
+        mean_error = validation['mean_error_pct'] if validation['valid'] else 0
         
         # Build response based on asset type
         if is_macro:
