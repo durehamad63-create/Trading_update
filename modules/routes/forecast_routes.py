@@ -59,55 +59,37 @@ def setup_forecast_routes(app: FastAPI, model, database):
             future_prices = [predicted_price]  # Only next expected value
             future_timestamps = [(datetime.now() + timedelta(days=freq_info['days'])).isoformat()]
         else:
-            # Timeframe mapping: query stored predictions from finer timeframe models
-            timeframe_mapping = {
-                '1D': {'model_tf': '1h', 'steps': 12},  # 12 hourly predictions
-                '1W': {'model_tf': '1D', 'steps': 4},   # 4 daily predictions
-                '1M': {'model_tf': '1W', 'steps': 7},   # 7 weekly predictions
-                '1h': {'model_tf': '1h', 'steps': 12},  # 12 hourly predictions
-                '4h': {'model_tf': '4h', 'steps': 6}    # 6 4-hour predictions
+            # Multi-step prediction with caching
+            timeframe_steps = {
+                '1D': 12,  # 12 hourly predictions
+                '1W': 7,   # 7 daily predictions
+                '1M': 4,   # 4 weekly predictions
+                '1h': 12,  # 12 hourly predictions
+                '4h': 6    # 6 4-hour predictions
             }
             
-            mapping = timeframe_mapping.get(actual_timeframe, {'model_tf': actual_timeframe, 'steps': 1})
-            model_timeframe = mapping['model_tf']
-            num_steps = mapping['steps']
+            num_steps = timeframe_steps.get(actual_timeframe, 1)
             
-            # Query stored predictions from database for finer timeframe
-            future_prices = []
-            future_timestamps = []
-            
-            if database and database.pool and num_steps > 1:
+            if num_steps > 1:
                 try:
-                    async with database.pool.acquire() as conn:
-                        db_key = symbol_manager.get_db_key(symbol, model_timeframe)
-                        
-                        # Get last N stored predictions from finer timeframe
-                        # created_at is the future timestamp being predicted (from gap filling)
-                        rows = await conn.fetch(
-                            "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT $2",
-                            db_key, num_steps
-                        )
-                        
-                        if rows and len(rows) >= num_steps:
-                            # Use stored predictions in chronological order
-                            for row in reversed(rows):
-                                future_prices.append(float(row['predicted_price']))
-                                future_timestamps.append(row['created_at'].isoformat())
+                    from multistep_predictor import multistep_predictor
+                    if multistep_predictor:
+                        multistep_data = await multistep_predictor.get_multistep_forecast(symbol, actual_timeframe, num_steps)
+                        if multistep_data:
+                            future_prices = multistep_data['prices']
+                            future_timestamps = multistep_data['timestamps']
                         else:
-                            # Fallback: not enough stored predictions
                             future_prices = [predicted_price]
                             future_timestamps = [datetime.now().isoformat()]
-                except Exception as e:
+                    else:
+                        future_prices = [predicted_price]
+                        future_timestamps = [datetime.now().isoformat()]
+                except:
                     future_prices = [predicted_price]
                     future_timestamps = [datetime.now().isoformat()]
             else:
-                # Single step prediction
                 future_prices = [predicted_price]
                 future_timestamps = [datetime.now().isoformat()]
-        
-        # Get forecast direction from prediction
-        if not is_macro:
-            forecast_direction = prediction.get('forecast_direction', 'HOLD')
         
         response = {
             "symbol": symbol,
@@ -116,7 +98,7 @@ def setup_forecast_routes(app: FastAPI, model, database):
             "forecast_direction": forecast_direction,
             "confidence": prediction.get('confidence', 75),
             "current_price": current_price,
-            "predicted_price": future_prices[-1] if future_prices else predicted_price,
+            "predicted_price": predicted_price,
             "change_24h": prediction.get('change_24h', 0),
             "chart": {
                 "past": past_prices,
@@ -125,7 +107,6 @@ def setup_forecast_routes(app: FastAPI, model, database):
             }
         }
         
-        # Add metadata
         if is_macro:
             macro_frequencies = {
                 'GDP': 'Quarterly',
@@ -135,9 +116,5 @@ def setup_forecast_routes(app: FastAPI, model, database):
                 'CONSUMER_CONFIDENCE': 'Monthly'
             }
             response['change_frequency'] = macro_frequencies.get(symbol, 'Monthly')
-        else:
-            # Add model metadata
-            response['model_timeframe'] = model_timeframe
-            response['prediction_steps'] = len(future_prices)
         
         return response

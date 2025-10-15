@@ -52,7 +52,10 @@ except Exception as e:
     print("❌ Application cannot start without ML model")
     sys.exit(1)
 
-from contextlib import asynccontextmanager
+# Initialize multi-step predictor
+from multistep_predictor import init_multistep_predictor
+init_multistep_predictor(model)
+print("✅ Multi-step predictor initialized")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
