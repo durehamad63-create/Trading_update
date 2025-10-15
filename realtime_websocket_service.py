@@ -36,11 +36,12 @@ class RealTimeWebSocketService:
             '1h': 60, '4H': 240, '1D': 1440, '1W': 10080
         }
         
-        # Use centralized cache manager
-        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
+        # Use centralized cache manager with priority system
+        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL, PredictionPriority
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
         self.cache_ttl = CacheTTL
+        self.prediction_priority = PredictionPriority
     
     async def start_binance_streams(self):
         """Start Binance WebSocket streams for all symbols immediately"""
@@ -173,7 +174,7 @@ class RealTimeWebSocketService:
                             if symbol in self.active_connections and self.active_connections[symbol]:
                                 # Immediate price broadcast without waiting for ML
                                 asyncio.create_task(self._broadcast_price_update(symbol, current_price, change_24h, volume))
-                                # ML predictions in background (stores data internally)
+                                # Update candles and forecasts with priority-based rate limiting
                                 asyncio.create_task(self._update_candles_and_forecast(symbol, current_price, volume, change_24h))
                             else:
                                 # Store data for all timeframes even without active connections
@@ -329,53 +330,49 @@ class RealTimeWebSocketService:
             ErrorHandler.log_websocket_error('broadcast', str(e))
     
     async def _generate_timeframe_forecast(self, symbol, timeframe, current_time):
-        """Generate real-time price update for specific timeframe"""
-        start_time = time.time()
-        print(f"🔍 [FORECAST-START] {symbol}:{timeframe}", flush=True)
-        
+        """Generate real-time price update for specific timeframe with priority-based caching"""
         try:
             # Get candle data for this timeframe
             if (symbol not in self.candle_cache or 
                 timeframe not in self.candle_cache[symbol] or 
                 not self.candle_cache[symbol][timeframe]):
-                print(f"❌ [NO-CANDLES] {symbol}:{timeframe}", flush=True)
                 return
             
             candles = self.candle_cache[symbol][timeframe]
             current_candle = candles[-1]
             current_price = float(current_candle['close'])
             
-            # Skip ML prediction for immediate price updates - use cached if available
-            predicted_price = current_price  # Default to current price
-            forecast_direction = 'HOLD'
-            confidence = 75
+            # Check cache first (unified caching)
+            cache_key = self.cache_keys.prediction(symbol, timeframe)
+            cached_pred = self.cache_manager.get_cache(cache_key)
             
-            # Use cached prediction for immediate updates, generate fresh in background
-            predicted_price = current_price
-            forecast_direction = 'HOLD'
-            confidence = 75
-            
-            # Try cached prediction first for speed
-            pred_start = time.time()
-            try:
-                if hasattr(self.model, 'prediction_cache') and symbol in self.model.prediction_cache:
-                    cache_time, cached_pred = self.model.prediction_cache[symbol]
-                    cache_age = datetime.now().timestamp() - cache_time
-                    
-                    if cache_age < 10:  # Use if less than 10s old
-                        predicted_price = float(cached_pred.get('predicted_price', current_price))
-                        forecast_direction = cached_pred.get('forecast_direction', 'HOLD')
-                        confidence = cached_pred.get('confidence', 75)
-                        print(f"✅ [PRED-CACHE-HIT] {symbol}:{timeframe} age:{cache_age:.1f}s", flush=True)
-                    else:
-                        print(f"⏰ [PRED-CACHE-STALE] {symbol}:{timeframe} age:{cache_age:.1f}s", flush=True)
-                        asyncio.create_task(self._generate_fresh_prediction(symbol))
+            if cached_pred:
+                # Use cached prediction
+                predicted_price = float(cached_pred.get('predicted_price', current_price))
+                forecast_direction = cached_pred.get('forecast_direction', 'HOLD')
+                confidence = cached_pred.get('confidence', 75)
+            else:
+                # Check if we should generate fresh prediction based on priority
+                if self.cache_manager.should_update_prediction(symbol, timeframe):
+                    # Generate fresh prediction (blocking - ensures data consistency)
+                    try:
+                        prediction = await self.model.predict(symbol, timeframe)
+                        predicted_price = float(prediction.get('predicted_price', current_price))
+                        forecast_direction = prediction.get('forecast_direction', 'HOLD')
+                        confidence = prediction.get('confidence', 75)
+                        
+                        # Mark as updated
+                        self.cache_manager.mark_prediction_updated(symbol, timeframe)
+                    except Exception as e:
+                        # Fallback to current price
+                        predicted_price = current_price
+                        forecast_direction = 'HOLD'
+                        confidence = 75
                 else:
-                    print(f"❌ [PRED-CACHE-MISS] {symbol}:{timeframe}", flush=True)
-                    # Generate fresh prediction in background (non-blocking)
-                    asyncio.create_task(self._generate_fresh_prediction(symbol))
-            except Exception as e:
-                print(f"❌ [PRED-ERROR] {symbol}: {e}", flush=True)
+                    # Use current price as fallback (prediction not due yet)
+                    predicted_price = current_price
+                    forecast_direction = 'HOLD'
+                    confidence = 75
             
             # Send real-time price update (for live chart updates)
             realtime_data = {
@@ -389,25 +386,17 @@ class RealTimeWebSocketService:
                 "timestamp": current_time.strftime("%H:%M"),
                 "forecast_direction": str(forecast_direction),
                 "confidence": int(confidence),
-
                 "last_updated": current_time.isoformat()
             }
             
             # Broadcast real-time update
-            broadcast_start = time.time()
             await self._broadcast_to_timeframe(symbol, timeframe, realtime_data)
-            broadcast_time = (time.time() - broadcast_start) * 1000
-            
-            total_time = (time.time() - start_time) * 1000
-            print(f"✅ [FORECAST-DONE] {symbol}:{timeframe} in {total_time:.1f}ms (broadcast: {broadcast_time:.1f}ms)", flush=True)
             
         except Exception as e:
-            total_time = (time.time() - start_time) * 1000
-            print(f"❌ [FORECAST-ERROR] {symbol}:{timeframe} after {total_time:.1f}ms: {e}", flush=True)
             ErrorHandler.log_prediction_error('realtime_update', str(e))
     
     async def _store_realtime_data(self, db_key, price_data, timeframe):
-        """Store real-time price data to database"""
+        """Store real-time price data to database with priority-based prediction storage"""
         try:
             db = self.database
             if not db or not db.pool:
@@ -420,17 +409,24 @@ class RealTimeWebSocketService:
                 except:
                     return
             
+            # Always store price data
             await db.store_actual_price(db_key, price_data, timeframe)
             
-            try:
-                base_symbol = db_key.split('_')[0]
-                prediction = await self.model.predict(base_symbol, timeframe)
-                await db.store_forecast(db_key, prediction, timeframe)
-            except Exception as e:
-                pass
+            # Store prediction only if update is due (based on priority)
+            base_symbol = db_key.split('_')[0]
+            if self.cache_manager.should_update_prediction(base_symbol, timeframe):
+                try:
+                    # Get cached prediction (already generated by _generate_timeframe_forecast)
+                    cache_key = self.cache_keys.prediction(base_symbol, timeframe)
+                    prediction = self.cache_manager.get_cache(cache_key)
+                    
+                    if prediction:
+                        await db.store_forecast(db_key, prediction, timeframe)
+                except Exception as e:
+                    pass
                 
         except Exception as e:
-            ErrorHandler.log_database_error('store_realtime', symbol, str(e))
+            ErrorHandler.log_database_error('store_realtime', db_key.split('_')[0], str(e))
     
     async def _broadcast_to_timeframe(self, symbol, timeframe, data):
         """Efficient broadcast with connection pooling and batching"""
@@ -645,15 +641,7 @@ class RealTimeWebSocketService:
         from utils.timestamp_utils import TimestampUtils
         return TimestampUtils.adjust_for_timeframe(timestamp, timeframe)
     
-    async def _generate_fresh_prediction(self, symbol):
-        """Generate fresh ML prediction in background"""
-        try:
-            print(f"🤖 Generating fresh ML prediction for {symbol}")
-            prediction = await self.model.predict(symbol, '1D')
-            print(f"✅ Fresh prediction generated for {symbol}: ${prediction.get('predicted_price', 'N/A'):.2f}")
-            # Cache will be updated by model.predict() method
-        except Exception as e:
-            print(f"❌ Fresh prediction failed for {symbol}: {e}")
+
     
     async def _mark_startup_complete(self):
         """Mark startup as complete after delay"""

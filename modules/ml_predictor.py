@@ -120,11 +120,12 @@ class MobileMLModel:
         
         print(f"🔧 Model Configuration: Legacy={self.use_legacy_model}, Raw={self.use_raw_models}, Priority={'Raw' if self.raw_model_priority else 'Legacy'}")
         
-        # Use centralized cache manager
-        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL
+        # Use centralized cache manager with priority system
+        from utils.cache_manager import CacheManager, CacheKeys, CacheTTL, PredictionPriority
         self.cache_manager = CacheManager
         self.cache_keys = CacheKeys
         self.cache_ttl = CacheTTL
+        self.prediction_priority = PredictionPriority
         
         print(f"🔧 ML Predictor initialized: min_interval={self.min_request_interval*1000:.0f}ms, cache_ttl={self.cache_ttl}s")
     
@@ -211,27 +212,15 @@ class MobileMLModel:
             raise Exception(f"Failed to download {model_type} raw model: {str(e)}")
     
     async def predict(self, symbol, timeframe='1D'):
-        """Generate real model prediction with Redis caching"""
+        """Generate real model prediction with unified priority-based caching"""
         import time
-        start_time = time.time()
         
+        # Check unified cache first
         cache_key = self.cache_keys.prediction(symbol, timeframe)
         cached_data = self.cache_manager.get_cache(cache_key)
         
         if cached_data:
             return cached_data
-        
-        # Rate limiting for real-time updates
-        if symbol in self.last_request_time:
-            time_since_last = start_time - self.last_request_time[symbol]
-            if time_since_last < self.min_request_interval:
-                if symbol in self.prediction_cache:
-                    cache_time, cached_result = self.prediction_cache[symbol]
-                    if start_time - cache_time < 2.0:
-                        return cached_result
-                await asyncio.sleep(self.min_request_interval - time_since_last)
-        
-        self.last_request_time[symbol] = start_time
         
         async with self.prediction_semaphore:
             
@@ -243,9 +232,9 @@ class MobileMLModel:
                 try:
                     raw_result = await self._predict_with_raw_models(symbol, timeframe)
                     if raw_result:
-                        ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
+                        # Use priority-based TTL
+                        ttl = self.prediction_priority.get_cache_ttl(symbol)
                         self.cache_manager.set_cache(cache_key, raw_result, ttl)
-                        self.prediction_cache[symbol] = (start_time, raw_result)
                         return raw_result
                 except Exception as raw_e:
                     raise Exception(f"Raw model prediction failed for {symbol}: {raw_e}")
@@ -405,9 +394,9 @@ class MobileMLModel:
                     'data_source': data_source
                 }
                 
-                ttl = self.cache_ttl.PREDICTION_HOT if symbol in ['BTC', 'ETH', 'NVDA', 'AAPL'] else self.cache_ttl.PREDICTION_NORMAL
+                # Use priority-based TTL
+                ttl = self.prediction_priority.get_cache_ttl(symbol)
                 self.cache_manager.set_cache(cache_key, result, ttl)
-                self.prediction_cache[symbol] = (start_time, result)
                 return result
             
             except Exception as e:

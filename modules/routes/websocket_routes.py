@@ -152,17 +152,10 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     logger.error(f"Prediction error for {symbol}: {e}")
                     continue
                 
-                # Timeframe-specific configuration
-                timeframe_config = {
-                    '1h': {'past': 24, 'future': 12},
-                    '4h': {'past': 24, 'future': 6},
-                    '1D': {'past': 30, 'future': 7},
-                    '1W': {'past': 16, 'future': 4},
-                    '1M': {'past': 30, 'future': 7}
-                }
-                config = timeframe_config.get(timeframe, {'past': 30, 'future': 7})
-                
                 # Get historical data from database
+                past_prices = []
+                timestamps = []
+                
                 if database and database.pool:
                     try:
                         from config.symbol_manager import symbol_manager
@@ -170,49 +163,67 @@ def setup_websocket_routes(app: FastAPI, model, database):
                         
                         async with database.pool.acquire() as conn:
                             rows = await conn.fetch(
-                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
-                                db_key, config['past']
+                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 30",
+                                db_key
                             )
                             
                             past_prices = [float(row['price']) for row in reversed(rows)] if rows else []
                             timestamps = [row['timestamp'].isoformat() for row in reversed(rows)] if rows else []
                     except Exception as e:
                         logger.error(f"Database error for {symbol}: {e}")
-                        past_prices = []
-                        timestamps = []
-                else:
-                    past_prices = []
-                    timestamps = []
                 
-                # Use single model prediction for future (fast, no iteration)
-                from datetime import timedelta
+                # Timeframe mapping: query stored predictions from finer timeframe models
+                timeframe_mapping = {
+                    '1D': {'model_tf': '1h', 'steps': 12},  # 12 hourly predictions
+                    '1W': {'model_tf': '1D', 'steps': 4},   # 4 daily predictions
+                    '1M': {'model_tf': '1W', 'steps': 7},   # 7 weekly predictions
+                    '1h': {'model_tf': '1h', 'steps': 12},  # 12 hourly predictions
+                    '4h': {'model_tf': '4h', 'steps': 6}    # 6 4-hour predictions
+                }
+                
+                mapping = timeframe_mapping.get(timeframe, {'model_tf': timeframe, 'steps': 1})
+                model_timeframe = mapping['model_tf']
+                num_steps = mapping['steps']
                 
                 current_price = prediction.get('current_price', 0)
-                predicted_price = prediction.get('predicted_price', current_price)
-                forecast_direction = prediction.get('forecast_direction', 'HOLD')
                 
-                # Generate smooth future line using single prediction
+                # Query stored predictions from database for finer timeframe
                 future_prices = []
-                price_change = predicted_price - current_price
+                from datetime import timedelta
                 
-                # Timeframe deltas
-                timeframe_deltas = {
-                    '1h': timedelta(hours=1),
-                    '4h': timedelta(hours=4),
-                    '1D': timedelta(days=1),
-                    '1W': timedelta(weeks=1),
-                    '1M': timedelta(days=30)
-                }
-                delta = timeframe_deltas.get(timeframe, timedelta(days=1))
+                if database and database.pool and num_steps > 1:
+                    try:
+                        from config.symbol_manager import symbol_manager
+                        db_key = symbol_manager.get_db_key(symbol, model_timeframe)
+                        
+                        async with database.pool.acquire() as conn:
+                            # Get last N stored predictions from finer timeframe
+                            # created_at is the future timestamp being predicted (from gap filling)
+                            rows = await conn.fetch(
+                                "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT $2",
+                                db_key, num_steps
+                            )
+                            
+                            if rows and len(rows) >= num_steps:
+                                # Use stored predictions in chronological order
+                                future_prices = [float(row['predicted_price']) for row in reversed(rows)]
+                                # Update timestamps with prediction times (created_at = future time)
+                                for row in reversed(rows):
+                                    timestamps.append(row['created_at'].isoformat())
+                            else:
+                                # Fallback: not enough stored predictions
+                                future_prices = [prediction.get('predicted_price', current_price)]
+                    except Exception as e:
+                        logger.error(f"Database query error: {e}")
+                        future_prices = [prediction.get('predicted_price', current_price)]
+                else:
+                    # Single step prediction
+                    future_prices = [prediction.get('predicted_price', current_price)]
                 
-                # Interpolate between current and predicted price
-                for i in range(config['future']):
-                    progress = (i + 1) / config['future']
-                    interpolated_price = current_price + (price_change * progress)
-                    future_prices.append(interpolated_price)
-                    
-                    next_time = WebSocketSecurity.get_utc_now() + delta * (i + 1)
-                    timestamps.append(next_time.isoformat())
+                # Get forecast direction from prediction
+                forecast_direction = prediction.get('forecast_direction', 'HOLD')
+                if not future_prices:
+                    future_prices = [prediction.get('predicted_price', current_price)]
                 
                 # Check if macro indicator
                 macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
@@ -223,6 +234,8 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "symbol": symbol,
                     "name": multi_asset.get_asset_name(symbol),
                     "timeframe": timeframe,
+                    "model_timeframe": model_timeframe,
+                    "prediction_steps": len(future_prices),
                     "forecast_direction": forecast_direction,
                     "confidence": prediction.get('confidence', 75),
                     "current_price": current_price,
@@ -234,12 +247,10 @@ def setup_websocket_routes(app: FastAPI, model, database):
                         "timestamps": timestamps
                     },
                     "update_count": update_count,
-                    "data_source": "Real Database Data",
+                    "data_source": f"Stored {model_timeframe} predictions" if len(future_prices) > 1 else "Real-time ML prediction",
                     "prediction_updated": True,
                     "next_prediction_update": (WebSocketSecurity.get_utc_now() + timedelta(minutes=24)).isoformat(),
                     "forecast_stable": forecast_direction == 'HOLD',
-                    "smooth_transition": True,
-                    "ml_bounds_enforced": True,
                 }
                 
                 # Add volume for non-macro indicators, change_frequency for macro
@@ -255,7 +266,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     }
                     chart_update["change_frequency"] = macro_frequencies.get(symbol, 'Monthly')
                 
-                # Check connection state before sending
+                # Send chart update
                 if websocket.client_state.name == 'CONNECTED':
                     await websocket.send_text(json.dumps(chart_update))
         

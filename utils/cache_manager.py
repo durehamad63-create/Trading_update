@@ -8,14 +8,48 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class CacheTTL:
-    """Centralized TTL configuration"""
+    """Centralized TTL configuration with priority system"""
     PRICE_CRYPTO = 60
     PRICE_STOCK = 60
     PRICE_MACRO = 600
-    PREDICTION_HOT = 30
-    PREDICTION_NORMAL = 60
+    
+    # Prediction cache TTLs by priority
+    PREDICTION_HOT = 30      # BTC, ETH, NVDA, AAPL - 30s cache
+    PREDICTION_NORMAL = 60   # Other major assets - 60s cache
+    PREDICTION_COLD = 120    # Less active assets - 120s cache
+    
     CHART_DATA = 900
     WEBSOCKET_HISTORY = 600
+
+class PredictionPriority:
+    """Prediction priority and update intervals"""
+    HOT_SYMBOLS = ['BTC', 'ETH', 'NVDA', 'AAPL']
+    NORMAL_SYMBOLS = ['MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'BNB', 'SOL', 'XRP']
+    
+    # Update intervals (how often to generate fresh predictions)
+    HOT_UPDATE_INTERVAL = 60      # 60s for hot symbols
+    NORMAL_UPDATE_INTERVAL = 120  # 120s for normal symbols
+    COLD_UPDATE_INTERVAL = 300    # 300s for cold symbols
+    
+    @classmethod
+    def get_cache_ttl(cls, symbol):
+        """Get cache TTL for symbol"""
+        if symbol in cls.HOT_SYMBOLS:
+            return CacheTTL.PREDICTION_HOT
+        elif symbol in cls.NORMAL_SYMBOLS:
+            return CacheTTL.PREDICTION_NORMAL
+        else:
+            return CacheTTL.PREDICTION_COLD
+    
+    @classmethod
+    def get_update_interval(cls, symbol):
+        """Get update interval for symbol"""
+        if symbol in cls.HOT_SYMBOLS:
+            return cls.HOT_UPDATE_INTERVAL
+        elif symbol in cls.NORMAL_SYMBOLS:
+            return cls.NORMAL_UPDATE_INTERVAL
+        else:
+            return cls.COLD_UPDATE_INTERVAL
 
 class CacheManager:
     _redis_client = None
@@ -50,8 +84,6 @@ class CacheManager:
     @classmethod
     def set_cache(cls, key, value, ttl=60):
         """Set cache with Redis primary, memory fallback"""
-        start_time = time.time()
-        
         # Enforce memory cache size limit (LRU eviction)
         if len(cls._memory_cache) >= cls._max_memory_cache_size:
             # Remove oldest entry
@@ -68,11 +100,7 @@ class CacheManager:
         try:
             client = cls.get_redis_client()
             if client:
-                redis_start = time.time()
-                serialize_start = time.time()
                 serialized = json.dumps(value, default=str)
-                serialize_time = (time.time() - serialize_start) * 1000
-                
                 client.setex(key, ttl, serialized)
         except Exception as e:
             import logging
@@ -81,16 +109,11 @@ class CacheManager:
     @classmethod
     def get_cache(cls, key):
         """Get cache with Redis primary, memory fallback"""
-        start_time = time.time()
-        
         # Try Redis first
         try:
             client = cls.get_redis_client()
             if client:
-                redis_start = time.time()
                 data = client.get(key)
-                redis_time = (time.time() - redis_start) * 1000
-                
                 if data:
                     result = json.loads(data)
                     return result
@@ -109,6 +132,30 @@ class CacheManager:
                 cls._cache_timestamps.pop(key, None)
         
         return None
+    
+    @classmethod
+    def should_update_prediction(cls, symbol, timeframe='1D'):
+        """Check if prediction should be updated based on priority"""
+        from utils.cache_manager import PredictionPriority
+        
+        timestamp_key = f"pred_time:{symbol}:{timeframe}"
+        last_update = cls.get_cache(timestamp_key)
+        
+        if not last_update:
+            return True
+        
+        import time
+        time_since_update = time.time() - last_update
+        update_interval = PredictionPriority.get_update_interval(symbol)
+        
+        return time_since_update >= update_interval
+    
+    @classmethod
+    def mark_prediction_updated(cls, symbol, timeframe='1D'):
+        """Mark prediction as updated"""
+        import time
+        timestamp_key = f"pred_time:{symbol}:{timeframe}"
+        cls.set_cache(timestamp_key, time.time(), ttl=600)
     
     @classmethod
     def delete_cache(cls, key):
@@ -145,6 +192,9 @@ class CacheManager:
             import logging
             logging.warning(f"Redis pattern clear failed for {pattern}: {e}")
 
+# Export PredictionPriority for use in other modules
+__all__ = ['CacheManager', 'CacheKeys', 'CacheTTL', 'PredictionPriority']
+
 class CacheKeys:
     # Unified key patterns
     @staticmethod
@@ -154,6 +204,11 @@ class CacheKeys:
     @staticmethod
     def prediction(symbol, timeframe='1D'):
         return f"prediction:{symbol}:{timeframe}"
+    
+    @staticmethod
+    def prediction_timestamp(symbol, timeframe='1D'):
+        """Track last prediction generation time"""
+        return f"pred_time:{symbol}:{timeframe}"
     
     @staticmethod
     def market_summary(class_filter="all"):
