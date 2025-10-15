@@ -184,25 +184,18 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     past_prices = []
                     timestamps = []
                 
-                # Multi-step prediction using finer timeframe models
+                # Use single model prediction for future (fast, no iteration)
                 from datetime import timedelta
                 
-                # Map display timeframe to prediction timeframe for multi-step forecasting
-                prediction_timeframe_map = {
-                    '1D': '1h',  # Use hourly predictions for daily chart
-                    '1W': '1D',  # Use daily predictions for weekly chart
-                    '1M': '1W'   # Use weekly predictions for monthly chart
-                }
-                
-                # For 1h and 4h, use their own models (single step)
-                pred_tf = prediction_timeframe_map.get(timeframe, timeframe)
-                
-                # Generate multi-step predictions
-                future_prices = []
                 current_price = prediction.get('current_price', 0)
-                last_price = current_price
+                predicted_price = prediction.get('predicted_price', current_price)
+                forecast_direction = prediction.get('forecast_direction', 'HOLD')
                 
-                # Timeframe deltas for timestamp generation
+                # Generate smooth future line using single prediction
+                future_prices = []
+                price_change = predicted_price - current_price
+                
+                # Timeframe deltas
                 timeframe_deltas = {
                     '1h': timedelta(hours=1),
                     '4h': timedelta(hours=4),
@@ -210,28 +203,16 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     '1W': timedelta(weeks=1),
                     '1M': timedelta(days=30)
                 }
+                delta = timeframe_deltas.get(timeframe, timedelta(days=1))
                 
-                # Generate predictions iteratively
+                # Interpolate between current and predicted price
                 for i in range(config['future']):
-                    try:
-                        # Get prediction for next step using finer timeframe
-                        step_prediction = await model.predict(symbol, pred_tf)
-                        next_price = step_prediction.get('predicted_price', last_price)
-                        future_prices.append(next_price)
-                        last_price = next_price
-                        
-                        # Add timestamp for this prediction
-                        delta = timeframe_deltas.get(pred_tf, timedelta(days=1))
-                        next_time = WebSocketSecurity.get_utc_now() + delta * (i + 1)
-                        timestamps.append(next_time.isoformat())
-                    except Exception as e:
-                        # Fallback to last known price if prediction fails
-                        future_prices.append(last_price)
-                        delta = timeframe_deltas.get(pred_tf, timedelta(days=1))
-                        next_time = WebSocketSecurity.get_utc_now() + delta * (i + 1)
-                        timestamps.append(next_time.isoformat())
-                
-                forecast_direction = prediction.get('forecast_direction', 'HOLD')
+                    progress = (i + 1) / config['future']
+                    interpolated_price = current_price + (price_change * progress)
+                    future_prices.append(interpolated_price)
+                    
+                    next_time = WebSocketSecurity.get_utc_now() + delta * (i + 1)
+                    timestamps.append(next_time.isoformat())
                 
                 # Check if macro indicator
                 macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
@@ -274,7 +255,9 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     }
                     chart_update["change_frequency"] = macro_frequencies.get(symbol, 'Monthly')
                 
-                await websocket.send_text(json.dumps(chart_update))
+                # Check connection state before sending
+                if websocket.client_state.name == 'CONNECTED':
+                    await websocket.send_text(json.dumps(chart_update))
         
         except WebSocketDisconnect:
             logger.info(f"Chart WebSocket disconnected: {symbol}")
