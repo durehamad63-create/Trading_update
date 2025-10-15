@@ -8,6 +8,8 @@ def setup_trends_routes(app: FastAPI, model, database):
     
     @app.get("/api/asset/{symbol}/trends")
     async def asset_trends(symbol: str, timeframe: str = "1D"):
+        print(f"🔍 TRENDS API: symbol={symbol}, timeframe={timeframe}")
+        
         if not database or not database.pool:
             return {'error': 'Database not available'}
         
@@ -18,10 +20,12 @@ def setup_trends_routes(app: FastAPI, model, database):
         # Macro indicators: always use 1D, ignore timeframe parameter
         if is_macro:
             db_timeframe = "1D"
+            print(f"📊 MACRO: Using db_timeframe=1D (ignored input timeframe={timeframe})")
         else:
             # Crypto/Stock: use provided timeframe
             timeframe_mapping = {'7D': '1W', '1Y': '1W', '5Y': '1M'}
             db_timeframe = timeframe_mapping.get(timeframe, timeframe)
+            print(f"📈 CRYPTO/STOCK: Using db_timeframe={db_timeframe} (input timeframe={timeframe})")
         
         try:
             prediction = await model.predict(symbol, db_timeframe)
@@ -54,7 +58,10 @@ def setup_trends_routes(app: FastAPI, model, database):
             """, db_symbol)
             
             if not rows:
+                print(f"❌ No historical data found for {db_symbol}")
                 return {'error': 'No historical data available'}
+            
+            print(f"✅ Found {len(rows)} historical records for {db_symbol}")
             
             for record in rows:
                 price = float(record['actual_price'])
@@ -107,7 +114,12 @@ def setup_trends_routes(app: FastAPI, model, database):
         accuracy_pct = (hits / total * 100) if total > 0 else 0
         mean_error = validation['mean_error_pct'] if validation['valid'] else 0
         
+        print(f"📊 ACCURACY: hits={hits}, total={total}, accuracy={accuracy_pct:.1f}%, mean_error={mean_error:.1f}%")
+        print(f"📋 Valid pairs: actual={len(valid_actual)}, predicted={len(valid_predicted)}")
+        
         # Build response based on asset type
+        print(f"🎯 Building response: is_macro={is_macro}, timeframe={timeframe}, db_timeframe={db_timeframe}")
+        
         if is_macro:
             macro_frequencies = {
                 'GDP': 'Quarterly',
