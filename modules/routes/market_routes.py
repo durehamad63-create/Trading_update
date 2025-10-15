@@ -59,13 +59,14 @@ def setup_market_routes(app: FastAPI, model, database):
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
-                    # Predictions are optional - show asset even without prediction
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 50,
-                            'predicted_price': price_data['current_price']
-                        }
+                        try:
+                            prediction = await model.predict(symbol, '1D')
+                        except Exception:
+                            continue
+                    
+                    if not prediction:
+                        continue
                     
                     # Use real model range values
                     current_price = price_data['current_price']
@@ -118,13 +119,14 @@ def setup_market_routes(app: FastAPI, model, database):
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
-                    # Predictions are optional - show asset even without prediction
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 50,
-                            'predicted_price': price_data['current_price']
-                        }
+                        try:
+                            prediction = await model.predict(symbol, '1D')
+                        except Exception:
+                            continue
+                    
+                    if not prediction:
+                        continue
                     
                     # Use real model range values
                     current_price = price_data['current_price']
@@ -175,13 +177,14 @@ def setup_market_routes(app: FastAPI, model, database):
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
-                    # Predictions are optional - show asset even without prediction
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 50,
-                            'predicted_price': price_data['current_price']
-                        }
+                        try:
+                            prediction = await model.predict(symbol, '1D')
+                        except Exception:
+                            continue
+                    
+                    if not prediction:
+                        continue
                     
                     # Define update frequencies for macro indicators
                     macro_frequencies = {
@@ -253,13 +256,14 @@ def setup_market_routes(app: FastAPI, model, database):
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
                     
-                    # Predictions are optional - show asset even without prediction
                     if not prediction:
-                        prediction = {
-                            'forecast_direction': 'HOLD',
-                            'confidence': 50,
-                            'predicted_price': price_data['current_price']
-                        }
+                        try:
+                            prediction = await model.predict(symbol, '1D')
+                        except Exception:
+                            continue
+                    
+                    if not prediction:
+                        continue
                     
                     # Define update frequencies for macro indicators
                     macro_frequencies = {
