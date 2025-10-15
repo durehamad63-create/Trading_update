@@ -534,7 +534,7 @@ class MobileMLModel:
             if asset_type == 'macro':
                 required_keys = ['price_model', 'lower_model', 'upper_model', 'scaler', 'features']
             else:
-                required_keys = ['price_model', 'high_model', 'low_model', 'scaler', 'features']
+                required_keys = ['price_model', 'high_model', 'low_model', 'confidence_model', 'scaler', 'features']
             
             if not all(key in model_data for key in required_keys):
                 raise Exception(f"Incomplete model data for {symbol}:{timeframe}")
@@ -594,21 +594,19 @@ class MobileMLModel:
                 range_low = np.clip(range_low, -0.08, 0.08)
                 range_high = np.clip(range_high, -0.08, 0.08)
             
-            # Calculate confidence based on range width and model performance
-            range_width = abs(range_high - range_low)
-            model_r2 = model_data['metrics'].get('price_r2', 0)
-            
-            if model_r2 > 0.2:
-                base_confidence = 75
-            elif model_r2 > 0.1:
-                base_confidence = 70
-            elif model_r2 > 0:
-                base_confidence = 65
+            # Get confidence from model
+            if asset_type == 'macro':
+                # Macro uses range-based confidence
+                range_width = abs(range_high - range_low)
+                confidence = 80 - (range_width * 100)
+                confidence = np.clip(confidence, 60, 90)
             else:
-                base_confidence = 60
-            
-            confidence = base_confidence - (range_width * 100)
-            confidence = np.clip(confidence, 50, 90)
+                # Crypto/Stock use confidence model
+                confidence = model_data['confidence_model'].predict(features_scaled)[0]
+                if asset_type == 'crypto':
+                    confidence = np.clip(confidence, 60, 95)
+                else:  # stock
+                    confidence = np.clip(confidence, 60, 95)
             
             predicted_price = current_price * (1 + price_change)
             high_price = current_price * (1 + range_high)
