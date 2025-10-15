@@ -391,13 +391,14 @@ class GapFillingService:
         # Use raw models for all asset types (crypto/stock/macro)
         use_raw_models = True
         
-        for i in range(30, len(data)):
+        for i in range(30, len(data) - 1):  # Stop at len-1 to have next_actual
             try:
                 hist_prices = np.array([d['close'] for d in data[max(0, i-30):i]])
                 if len(hist_prices) < 20:
                     continue
                 
                 current_price = hist_prices[-1]
+                next_actual_price = data[i + 1]['close']  # CRITICAL: Get next period's actual price
                 
                 # Use raw models for all asset types
                 prediction_result = await self._predict_with_raw_models_historical(
@@ -412,7 +413,8 @@ class GapFillingService:
                 
                 predictions.append({
                     'timestamp': data[i]['timestamp'],
-                    'actual_price': current_price,
+                    'current_price': current_price,  # Price at time i
+                    'actual_price': next_actual_price,  # FIXED: Actual price at time i+1 (target)
                     'predicted_price': prediction_result['predicted_price'],
                     'range_low': prediction_result['range_low'],
                     'range_high': prediction_result['range_high'],
@@ -422,9 +424,6 @@ class GapFillingService:
                     'rsi': 50,
                     'volatility': 0.02
                 })
-                
-                # Fallback if raw model fails
-                continue
                 
             except Exception as e:
                 continue
@@ -589,25 +588,23 @@ class GapFillingService:
         """Calculate accuracy using price-based error (not direction)"""
         results = []
         
-        for i in range(len(predictions) - 1):
-            current = predictions[i]
-            
-            # Compare predicted price with NEXT period's actual price
-            current_actual = current['actual_price']
-            next_actual = predictions[i + 1]['actual_price']
-            predicted_price = current['predicted_price']
+        for pred in predictions:
+            # Each prediction already has actual_price (next period's actual)
+            current_price = pred['current_price']
+            actual_price = pred['actual_price']  # Already the next period's price
+            predicted_price = pred['predicted_price']
             
             # Calculate price error percentage
-            price_error_pct = abs(predicted_price - next_actual) / next_actual * 100 if next_actual > 0 else 100
+            price_error_pct = abs(predicted_price - actual_price) / actual_price * 100 if actual_price > 0 else 100
             
             # Hit if prediction within 5% of actual (industry standard)
             result = 'Hit' if price_error_pct < 5.0 else 'Miss'
             
-            # Also track direction for reference
-            actual_price_change = (next_actual - current_actual) / current_actual
-            predicted_price_change = (predicted_price - current_actual) / current_actual
+            # Track direction for reference
+            actual_price_change = (actual_price - current_price) / current_price
+            predicted_price_change = (predicted_price - current_price) / current_price
             
-            # Direction with adaptive threshold based on volatility
+            # Direction with adaptive threshold
             threshold = 0.005  # 0.5% base threshold
             
             if abs(actual_price_change) > threshold:
@@ -615,18 +612,18 @@ class GapFillingService:
             else:
                 actual_direction = 'HOLD'
             
-            predicted_direction = current['forecast_direction']
+            predicted_direction = pred['forecast_direction']
             direction_match = predicted_direction == actual_direction
             
             results.append({
-                'timestamp': predictions[i + 1]['timestamp'],
+                'timestamp': pred['timestamp'],
                 'predicted_direction': predicted_direction,
                 'actual_direction': actual_direction,
                 'result': result,  # Based on price error, not direction
                 'direction_match': direction_match,
-                'actual_price': next_actual,
+                'actual_price': actual_price,
                 'predicted_price': predicted_price,
-                'confidence': current['confidence'],
+                'confidence': pred['confidence'],
                 'price_error_pct': round(price_error_pct, 2),
                 'actual_change_pct': round(actual_price_change * 100, 2),
                 'predicted_change_pct': round(predicted_price_change * 100, 2)
