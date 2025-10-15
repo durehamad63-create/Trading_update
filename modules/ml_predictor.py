@@ -11,6 +11,7 @@ import pandas as pd
 import requests
 import yfinance as yf
 import warnings
+import joblib
 from dotenv import load_dotenv
 from multi_asset_support import multi_asset
 from database import db
@@ -53,7 +54,6 @@ class MobileMLModel:
         
         if os.path.exists(macro_model_path):
             try:
-                import joblib
                 self.macro_models = joblib.load(macro_model_path)
                 print(f"✅ Macro models loaded")
             except Exception as e:
