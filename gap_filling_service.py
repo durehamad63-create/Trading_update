@@ -662,6 +662,7 @@ class GapFillingService:
             db_key = symbol_manager.get_db_key(symbol, timeframe)
             async with self.db.pool.acquire() as conn:
                 # Store predictions with conflict handling
+                pred_count = 0
                 for pred in predictions:
                     await conn.execute("""
                         INSERT INTO forecasts (symbol, predicted_price, confidence, 
@@ -670,14 +671,19 @@ class GapFillingService:
                         ON CONFLICT DO NOTHING
                     """, db_key, pred['predicted_price'], pred['confidence'],
                          pred['forecast_direction'], pred['trend_score'], pred['timestamp'])
+                    pred_count += 1
                 
                 # Store accuracy results with conflict handling
+                acc_count = 0
                 for result in results:
                     await conn.execute("""
                         INSERT INTO forecast_accuracy (symbol, actual_direction, result, evaluated_at)
                         VALUES ($1, $2, $3, $4)
                         ON CONFLICT DO NOTHING
                     """, db_key, result['actual_direction'], result['result'], result['timestamp'])
+                    acc_count += 1
+                
+                print(f"    📊 {db_key}: Stored {pred_count} predictions, {acc_count} accuracy records")
                 
         except Exception as e:
             print(f"      ❌ Error storing predictions for {db_key}: {e}")

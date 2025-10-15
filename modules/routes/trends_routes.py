@@ -102,10 +102,16 @@ def setup_trends_routes(app: FastAPI, model, database):
             valid_predicted.append(predicted)
             valid_timestamps.append(timestamps[i])
         
+        # Check if we have any valid pairs
+        if not valid_actual or not valid_predicted:
+            print(f"❌ No valid prediction pairs found for {symbol}:{db_timeframe}")
+            return {'error': 'No predictions available for this timeframe'}
+        
         # Validate only the valid pairs
         validation = data_validator.validate_accuracy_data(valid_actual, valid_predicted, symbol, db_timeframe)
         
         if not validation['valid']:
+            print(f"❌ Validation failed: {validation.get('error', 'Unknown error')}")
             return {'error': validation.get('error', 'Validation failed')}
         
         # Calculate accuracy as Hit rate (predictions within 5% error)
