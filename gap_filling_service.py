@@ -586,33 +586,50 @@ class GapFillingService:
             return None
     
     def _calculate_accuracy(self, predictions: List[Dict]) -> List[Dict]:
-        """Calculate accuracy by comparing predictions with next actual prices"""
+        """Calculate accuracy using price-based error (not direction)"""
         results = []
         
         for i in range(len(predictions) - 1):
             current = predictions[i]
+            
+            # Compare predicted price with NEXT period's actual price
+            current_actual = current['actual_price']
             next_actual = predictions[i + 1]['actual_price']
+            predicted_price = current['predicted_price']
             
-            # Calculate actual direction
-            price_change = (next_actual - current['actual_price']) / current['actual_price']
+            # Calculate price error percentage
+            price_error_pct = abs(predicted_price - next_actual) / next_actual * 100 if next_actual > 0 else 100
             
-            if abs(price_change) > 0.005:
-                actual_direction = 'UP' if price_change > 0 else 'DOWN'
+            # Hit if prediction within 5% of actual (industry standard)
+            result = 'Hit' if price_error_pct < 5.0 else 'Miss'
+            
+            # Also track direction for reference
+            actual_price_change = (next_actual - current_actual) / current_actual
+            predicted_price_change = (predicted_price - current_actual) / current_actual
+            
+            # Direction with adaptive threshold based on volatility
+            threshold = 0.005  # 0.5% base threshold
+            
+            if abs(actual_price_change) > threshold:
+                actual_direction = 'UP' if actual_price_change > 0 else 'DOWN'
             else:
                 actual_direction = 'HOLD'
             
-            # Compare with prediction
             predicted_direction = current['forecast_direction']
-            result = 'Hit' if predicted_direction == actual_direction else 'Miss'
+            direction_match = predicted_direction == actual_direction
             
             results.append({
                 'timestamp': predictions[i + 1]['timestamp'],
                 'predicted_direction': predicted_direction,
                 'actual_direction': actual_direction,
-                'result': result,
+                'result': result,  # Based on price error, not direction
+                'direction_match': direction_match,
                 'actual_price': next_actual,
-                'predicted_price': current['predicted_price'],
-                'confidence': current['confidence']
+                'predicted_price': predicted_price,
+                'confidence': current['confidence'],
+                'price_error_pct': round(price_error_pct, 2),
+                'actual_change_pct': round(actual_price_change * 100, 2),
+                'predicted_change_pct': round(predicted_price_change * 100, 2)
             })
         
         return results

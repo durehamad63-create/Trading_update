@@ -13,6 +13,9 @@ def setup_trends_routes(app: FastAPI, model, database):
         if not database or not database.pool:
             return {'error': 'Database not available'}
         
+        # Normalize timeframe to uppercase (1h -> 1H, 4h -> 4H)
+        timeframe_normalized = timeframe.upper()
+        
         # Check if macro indicator - they don't support timeframes
         macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
         is_macro = symbol in macro_symbols
@@ -22,9 +25,9 @@ def setup_trends_routes(app: FastAPI, model, database):
             db_timeframe = "1D"
             print(f"📊 MACRO: Using db_timeframe=1D (ignored input timeframe={timeframe})")
         else:
-            # Crypto/Stock: use provided timeframe
+            # Crypto/Stock: use normalized timeframe
             timeframe_mapping = {'7D': '1W', '1Y': '1W', '5Y': '1M'}
-            db_timeframe = timeframe_mapping.get(timeframe, timeframe)
+            db_timeframe = timeframe_mapping.get(timeframe_normalized, timeframe_normalized)
             print(f"📈 CRYPTO/STOCK: Using db_timeframe={db_timeframe} (input timeframe={timeframe})")
         
         try:
@@ -150,7 +153,7 @@ def setup_trends_routes(app: FastAPI, model, database):
         else:
             response = {
                 'symbol': symbol,
-                'timeframe': timeframe,
+                'timeframe': timeframe_normalized,  # Return normalized timeframe
                 'overall_accuracy': round(accuracy_pct, 1),
                 'mean_error_pct': round(mean_error, 1),
                 'chart': {
