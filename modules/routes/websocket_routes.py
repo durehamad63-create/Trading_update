@@ -152,6 +152,16 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     logger.error(f"Prediction error for {symbol}: {e}")
                     continue
                 
+                # Timeframe-specific configuration
+                timeframe_config = {
+                    '1h': {'past': 24, 'future': 12},
+                    '4h': {'past': 24, 'future': 6},
+                    '1D': {'past': 30, 'future': 7},
+                    '1W': {'past': 16, 'future': 4},
+                    '1M': {'past': 30, 'future': 7}
+                }
+                config = timeframe_config.get(timeframe, {'past': 30, 'future': 7})
+                
                 # Get historical data from database
                 if database and database.pool:
                     try:
@@ -160,8 +170,8 @@ def setup_websocket_routes(app: FastAPI, model, database):
                         
                         async with database.pool.acquire() as conn:
                             rows = await conn.fetch(
-                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 30",
-                                db_key
+                                "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT $2",
+                                db_key, config['past']
                             )
                             
                             past_prices = [float(row['price']) for row in reversed(rows)] if rows else []
@@ -174,17 +184,54 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     past_prices = []
                     timestamps = []
                 
-                # Use only model's prediction (no synthetic future)
-                current_price = prediction.get('current_price', 0)
-                predicted_price = prediction.get('predicted_price', current_price)
-                forecast_direction = prediction.get('forecast_direction', 'HOLD')
-                
-                # Only show model's actual prediction
-                future_prices = [predicted_price]
-                
-                # Single future timestamp
+                # Multi-step prediction using finer timeframe models
                 from datetime import timedelta
-                timestamps.append(WebSocketSecurity.get_utc_now().isoformat())
+                
+                # Map display timeframe to prediction timeframe for multi-step forecasting
+                prediction_timeframe_map = {
+                    '1D': '1h',  # Use hourly predictions for daily chart
+                    '1W': '1D',  # Use daily predictions for weekly chart
+                    '1M': '1W'   # Use weekly predictions for monthly chart
+                }
+                
+                # For 1h and 4h, use their own models (single step)
+                pred_tf = prediction_timeframe_map.get(timeframe, timeframe)
+                
+                # Generate multi-step predictions
+                future_prices = []
+                current_price = prediction.get('current_price', 0)
+                last_price = current_price
+                
+                # Timeframe deltas for timestamp generation
+                timeframe_deltas = {
+                    '1h': timedelta(hours=1),
+                    '4h': timedelta(hours=4),
+                    '1D': timedelta(days=1),
+                    '1W': timedelta(weeks=1),
+                    '1M': timedelta(days=30)
+                }
+                
+                # Generate predictions iteratively
+                for i in range(config['future']):
+                    try:
+                        # Get prediction for next step using finer timeframe
+                        step_prediction = await model.predict(symbol, pred_tf)
+                        next_price = step_prediction.get('predicted_price', last_price)
+                        future_prices.append(next_price)
+                        last_price = next_price
+                        
+                        # Add timestamp for this prediction
+                        delta = timeframe_deltas.get(pred_tf, timedelta(days=1))
+                        next_time = WebSocketSecurity.get_utc_now() + delta * (i + 1)
+                        timestamps.append(next_time.isoformat())
+                    except Exception as e:
+                        # Fallback to last known price if prediction fails
+                        future_prices.append(last_price)
+                        delta = timeframe_deltas.get(pred_tf, timedelta(days=1))
+                        next_time = WebSocketSecurity.get_utc_now() + delta * (i + 1)
+                        timestamps.append(next_time.isoformat())
+                
+                forecast_direction = prediction.get('forecast_direction', 'HOLD')
                 
                 # Check if macro indicator
                 macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
