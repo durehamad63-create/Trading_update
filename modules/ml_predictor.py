@@ -508,13 +508,22 @@ class MobileMLModel:
             if symbol in CRYPTO_SYMBOLS and self.crypto_raw_models:
                 models = self.crypto_raw_models
                 asset_type = 'crypto'
-                # Normalize crypto timeframes to lowercase (models trained with lowercase)
-                timeframe = timeframe.lower()
+                # Normalize crypto timeframes: lowercase for short (1h, 4h), uppercase for long (1D, 1W, 1M)
+                timeframe_map = {'1h': '1h', '1H': '1h', '4h': '4h', '4H': '4h', 
+                                '1d': '1D', '1D': '1D', '1w': '1W', '1W': '1W', 
+                                '1m': '1M', '1M': '1M'}
+                timeframe = timeframe_map.get(timeframe, timeframe)
             elif symbol in STOCK_SYMBOLS and self.stock_raw_models:
                 models = self.stock_raw_models
                 asset_type = 'stock'
-                # Map API timeframes to trained model keys
-                timeframe_map = {'1h': '60m', '1H': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
+                # Stock models available: ['5m', '15m', '30m', '60m', '4h', '1d', '1wk', '1mo']
+                timeframe_map = {
+                    '1h': '60m', '1H': '60m',
+                    '4h': '4h', '4H': '4h',
+                    '1d': '1d', '1D': '1d',
+                    '1w': '1wk', '1W': '1wk',
+                    '1m': '1mo', '1M': '1mo'
+                }
                 timeframe = timeframe_map.get(timeframe, timeframe)
             elif symbol in macro_symbols and self.macro_models:
                 models = self.macro_models
