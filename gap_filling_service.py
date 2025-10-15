@@ -327,7 +327,7 @@ class GapFillingService:
 
     
     async def _get_macro_data(self, symbol: str, timeframe: str) -> List[Dict]:
-        """Get real macro economic data from FRED API"""
+        """Get real macro economic data from FRED API - ALL available data"""
         try:
             from fredapi import Fred
             fred_api_key = os.getenv('FRED_API_KEY')
@@ -350,14 +350,9 @@ class GapFillingService:
             if not series_id:
                 raise Exception(f"No FRED series for {symbol}")
             
-            # Get real data from FRED
-            interval = self.storage_intervals.get(timeframe, timedelta(days=1))
-            days_back = self.max_records * (interval.days if interval.days > 0 else 1)
-            
-            fred_data = fred.get_series(
-                series_id,
-                observation_start=datetime.now() - timedelta(days=days_back)
-            )
+            # Get ALL available data from FRED (no date limit)
+            # Macro data is sparse (quarterly/monthly), so we need maximum history
+            fred_data = fred.get_series(series_id)
             
             if fred_data is None or len(fred_data) == 0:
                 raise Exception(f"No FRED data for {symbol}")
@@ -365,18 +360,19 @@ class GapFillingService:
             # Convert to required format - REAL DATA ONLY
             data = []
             for timestamp, value in fred_data.items():
-                current_value = float(value)
-                data.append({
-                    'timestamp': timestamp,
-                    'open': current_value,
-                    'high': current_value,  # Same as close - no fake data
-                    'low': current_value,   # Same as close - no fake data
-                    'close': current_value,
-                    'volume': 0             # No volume for macro indicators
-                })
+                if pd.notna(value):  # Skip NaN values
+                    current_value = float(value)
+                    data.append({
+                        'timestamp': timestamp,
+                        'open': current_value,
+                        'high': current_value,  # Same as close - no fake data
+                        'low': current_value,   # Same as close - no fake data
+                        'close': current_value,
+                        'volume': 0             # No volume for macro indicators
+                    })
             
-            # Take last max_records
-            data = data[-self.max_records:] if len(data) > self.max_records else data
+            # Take last 200 records for storage (but use all for predictions)
+            data = data[-200:] if len(data) > 200 else data
             
             print(f"    ✅ {symbol} {timeframe}: Got {len(data)} real FRED data points")
             return data
