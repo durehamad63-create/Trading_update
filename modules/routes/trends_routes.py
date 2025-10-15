@@ -15,13 +15,11 @@ def setup_trends_routes(app: FastAPI, model, database):
         macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
         is_macro = symbol in macro_symbols
         
-        if is_macro and timeframe != "1D":
-            return {"error": f"Macro indicator {symbol} does not support timeframe {timeframe}. Use default."}
-        
-        # Use 1D for macro indicators regardless of timeframe parameter
+        # Macro indicators: always use 1D, ignore timeframe parameter
         if is_macro:
             db_timeframe = "1D"
         else:
+            # Crypto/Stock: use provided timeframe
             timeframe_mapping = {'7D': '1W', '1Y': '1W', '5Y': '1M'}
             db_timeframe = timeframe_mapping.get(timeframe, timeframe)
         
@@ -103,28 +101,45 @@ def setup_trends_routes(app: FastAPI, model, database):
         if not validation['valid']:
             return {'error': validation.get('error', 'Validation failed')}
         
-        response = {
-            'symbol': symbol,
-            'timeframe': db_timeframe,
-            'overall_accuracy': round(validation['mean_error_pct'], 1) if validation['valid'] else 0,
-            'chart': {
-                'actual': valid_actual,
-                'predicted': valid_predicted,
-                'timestamps': valid_timestamps
-            },
-            'accuracy_history': accuracy_history,
-            'validation': validation
-        }
+        # Calculate accuracy as percentage (100 - error)
+        mean_error = validation['mean_error_pct'] if validation['valid'] else 100
+        accuracy_pct = max(0, min(100, 100 - mean_error))
         
-        # Add change_frequency for macro indicators
+        # Build response based on asset type
         if is_macro:
             macro_frequencies = {
                 'GDP': 'Quarterly',
                 'CPI': 'Monthly', 
                 'UNEMPLOYMENT': 'Monthly',
-                'FED_RATE': 'Every 6 weeks (FOMC meetings)',
+                'FED_RATE': 'Every 6 weeks',
                 'CONSUMER_CONFIDENCE': 'Monthly'
             }
-            response['change_frequency'] = macro_frequencies.get(symbol, 'Monthly')
+            response = {
+                'symbol': symbol,
+                'change_frequency': macro_frequencies.get(symbol, 'Monthly'),
+                'overall_accuracy': round(accuracy_pct, 1),
+                'mean_error_pct': round(mean_error, 1),
+                'chart': {
+                    'actual': valid_actual,
+                    'predicted': valid_predicted,
+                    'timestamps': valid_timestamps
+                },
+                'accuracy_history': accuracy_history,
+                'validation': validation
+            }
+        else:
+            response = {
+                'symbol': symbol,
+                'timeframe': timeframe,
+                'overall_accuracy': round(accuracy_pct, 1),
+                'mean_error_pct': round(mean_error, 1),
+                'chart': {
+                    'actual': valid_actual,
+                    'predicted': valid_predicted,
+                    'timestamps': valid_timestamps
+                },
+                'accuracy_history': accuracy_history,
+                'validation': validation
+            }
         
         return response
