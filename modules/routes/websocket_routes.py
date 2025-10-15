@@ -142,7 +142,24 @@ def setup_websocket_routes(app: FastAPI, model, database):
         
         try:
             while True:
-                await asyncio.sleep(5)
+                # Check for incoming messages (timeframe change)
+                try:
+                    message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
+                    data = json.loads(message)
+                    
+                    if data.get('type') == 'change_timeframe':
+                        new_timeframe = WebSocketSecurity.validate_timeframe(data.get('timeframe', '1D'))
+                        if new_timeframe != timeframe:
+                            timeframe = new_timeframe
+                            logger.info(f"Timeframe changed to {timeframe} for {symbol}")
+                            update_count = 0  # Reset counter
+                except asyncio.TimeoutError:
+                    pass  # No message, continue with update
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid JSON from client for {symbol}")
+                except Exception as e:
+                    logger.error(f"Message handling error: {e}")
+                
                 update_count += 1
                 
                 # Get prediction
@@ -232,6 +249,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "symbol": symbol,
                     "name": multi_asset.get_asset_name(symbol),
                     "timeframe": timeframe,
+                    "available_timeframes": ['1h', '4h', '1D', '1W', '1M'],
                     "prediction_steps": len(future_prices),
                     "forecast_direction": forecast_direction,
                     "confidence": prediction.get('confidence', 75),
