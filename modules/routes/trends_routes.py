@@ -69,15 +69,15 @@ def setup_trends_routes(app: FastAPI, model, database):
                     else:
                         predicted_prices.append(None)
         
-        validation = data_validator.validate_accuracy_data(actual_prices, predicted_prices, symbol, timeframe)
-        
-        if not validation['valid']:
-            return {'error': validation.get('error', 'Validation failed')}
-        
+        # Build accuracy history and filter valid pairs
         accuracy_history = []
-        for i in range(min(len(actual_prices), len(predicted_prices))):
+        valid_actual = []
+        valid_predicted = []
+        valid_timestamps = []
+        
+        for i in range(len(actual_prices)):
             actual = actual_prices[i]
-            predicted = predicted_prices[i]
+            predicted = predicted_prices[i] if i < len(predicted_prices) else None
             
             if predicted is None:
                 continue
@@ -92,17 +92,25 @@ def setup_trends_routes(app: FastAPI, model, database):
                 'result': result,
                 'error_pct': round(error_pct, 1)
             })
+            
+            valid_actual.append(actual)
+            valid_predicted.append(predicted)
+            valid_timestamps.append(timestamps[i])
         
-        predicted_prices = [p for p in predicted_prices if p is not None]
+        # Validate only the valid pairs
+        validation = data_validator.validate_accuracy_data(valid_actual, valid_predicted, symbol, timeframe)
+        
+        if not validation['valid']:
+            return {'error': validation.get('error', 'Validation failed')}
         
         response = {
             'symbol': symbol,
             'timeframe': db_timeframe,
-            'overall_accuracy': round(validation['mean_error_pct'], 1),
+            'overall_accuracy': round(validation['mean_error_pct'], 1) if validation['valid'] else 0,
             'chart': {
-                'actual': actual_prices,
-                'predicted': predicted_prices,
-                'timestamps': timestamps
+                'actual': valid_actual,
+                'predicted': valid_predicted,
+                'timestamps': valid_timestamps
             },
             'accuracy_history': accuracy_history,
             'validation': validation
