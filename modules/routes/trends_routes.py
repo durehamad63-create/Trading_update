@@ -46,19 +46,39 @@ def setup_trends_routes(app: FastAPI, model, database):
         async with database.pool.acquire() as conn:
             db_symbol = symbol_manager.get_db_key(symbol, db_timeframe)
             
-            # Join actual and predicted data by timestamp
-            rows = await conn.fetch("""
-                SELECT 
-                    a.price as actual_price,
-                    a.timestamp,
-                    f.predicted_price
-                FROM actual_prices a
-                LEFT JOIN forecasts f ON f.symbol = a.symbol 
-                    AND DATE_TRUNC('day', f.created_at) = DATE_TRUNC('day', a.timestamp)
-                WHERE a.symbol = $1
-                ORDER BY a.timestamp ASC
+            # Query actual prices
+            actual_rows = await conn.fetch("""
+                SELECT price, timestamp
+                FROM actual_prices
+                WHERE symbol = $1
+                ORDER BY timestamp ASC
                 LIMIT 50
             """, db_symbol)
+            
+            # Query forecasts separately
+            forecast_rows = await conn.fetch("""
+                SELECT predicted_price, created_at
+                FROM forecasts
+                WHERE symbol = $1
+                ORDER BY created_at ASC
+                LIMIT 50
+            """, db_symbol)
+            
+            # Build lookup for forecasts by date
+            forecast_map = {}
+            for f in forecast_rows:
+                date_key = f['created_at'].date()
+                forecast_map[date_key] = float(f['predicted_price'])
+            
+            # Combine actual and predicted
+            rows = []
+            for a in actual_rows:
+                date_key = a['timestamp'].date()
+                rows.append({
+                    'actual_price': a['price'],
+                    'timestamp': a['timestamp'],
+                    'predicted_price': forecast_map.get(date_key)
+                })
             
             if not rows:
                 print(f"❌ No historical data found for {db_symbol}")
