@@ -386,14 +386,14 @@ class GapFillingService:
             return []
     
     async def _generate_ml_predictions(self, data: List[Dict], symbol: str, timeframe: str, asset_class: str) -> List[Dict]:
-        """Generate ML predictions using raw models (crypto/stock) or specialized model (macro)"""
+        """Generate ML predictions using raw models for all asset types"""
         predictions = []
         
         if not self.model or len(data) < 20:
             return predictions
         
-        # Use raw models for crypto/stocks, specialized for macro
-        use_raw_models = asset_class in ['crypto', 'stocks']
+        # Use raw models for all asset types (crypto/stock/macro)
+        use_raw_models = True
         
         for i in range(30, len(data)):
             try:
@@ -403,157 +403,32 @@ class GapFillingService:
                 
                 current_price = hist_prices[-1]
                 
-                # Use raw models for crypto/stocks
-                if use_raw_models:
-                    prediction_result = await self._predict_with_raw_models_historical(
-                        symbol, timeframe, current_price, hist_prices, asset_class
-                    )
-                    if not prediction_result:
-                        continue
-                    
-                    # Skip if no range predictions from model
-                    if 'range_low' not in prediction_result or 'range_high' not in prediction_result:
-                        continue
-                    
-                    predictions.append({
-                        'timestamp': data[i]['timestamp'],  # FIXED: Use future timestamp being predicted
-                        'actual_price': current_price,
-                        'predicted_price': prediction_result['predicted_price'],
-                        'range_low': prediction_result['range_low'],
-                        'range_high': prediction_result['range_high'],
-                        'forecast_direction': prediction_result['forecast_direction'],
-                        'confidence': prediction_result['confidence'],
-                        'trend_score': int((prediction_result['predicted_price'] - current_price) / current_price * 100),
-                        'rsi': 50,
-                        'volatility': 0.02
-                    })
+                # Use raw models for all asset types
+                prediction_result = await self._predict_with_raw_models_historical(
+                    symbol, timeframe, current_price, hist_prices, asset_class
+                )
+                if not prediction_result:
                     continue
                 
-                # Use specialized model for macro indicators
-                hist_highs = np.array([d['high'] for d in data[max(0, i-30):i]])
-                hist_lows = np.array([d['low'] for d in data[max(0, i-30):i]])
-                hist_volumes = np.array([d['volume'] for d in data[max(0, i-30):i]])
-                
-                # Calculate ALL technical indicators from real historical data
-                # 1. Returns (log returns)
-                log_returns = np.diff(np.log(hist_prices))
-                return_lag_1 = log_returns[-1] if len(log_returns) >= 1 else 0
-                return_lag_3 = log_returns[-3] if len(log_returns) >= 3 else 0
-                return_lag_5 = log_returns[-5] if len(log_returns) >= 5 else 0
-                
-                # 2. Volatility (rolling std of returns)
-                volatility = np.std(log_returns[-20:]) if len(log_returns) >= 20 else np.std(log_returns)
-                
-                # 3. RSI (14-period)
-                deltas = np.diff(hist_prices)
-                gains = np.where(deltas > 0, deltas, 0)
-                losses = np.where(deltas < 0, -deltas, 0)
-                avg_gain = np.mean(gains[-14:]) if len(gains) >= 14 else np.mean(gains) if len(gains) > 0 else 0.01
-                avg_loss = np.mean(losses[-14:]) if len(losses) >= 14 else np.mean(losses) if len(losses) > 0 else 0.01
-                rsi = 100 - (100 / (1 + avg_gain / avg_loss)) if avg_loss > 0 else 50
-                
-                # 4. Moving Averages
-                sma_5 = np.mean(hist_prices[-5:]) if len(hist_prices) >= 5 else current_price
-                sma_10 = np.mean(hist_prices[-10:]) if len(hist_prices) >= 10 else current_price
-                sma_20 = np.mean(hist_prices[-20:]) if len(hist_prices) >= 20 else current_price
-                
-                # 5. Price Momentum
-                price_momentum = np.mean(log_returns[-5:]) if len(log_returns) >= 5 else 0
-                
-                # 6. Bollinger Bands
-                bb_middle = sma_20
-                bb_std = np.std(hist_prices[-20:]) if len(hist_prices) >= 20 else volatility * current_price
-                bb_upper = bb_middle + (2 * bb_std)
-                bb_lower = bb_middle - (2 * bb_std)
-                bb_width = (bb_upper - bb_lower) / bb_middle if bb_middle > 0 else 0
-                
-                # 7. High/Low indicators
-                high_20 = np.max(hist_highs[-20:]) if len(hist_highs) >= 20 else current_price
-                low_20 = np.min(hist_lows[-20:]) if len(hist_lows) >= 20 else current_price
-                
-                # 8. Volume indicators
-                avg_volume = np.mean(hist_volumes[-20:]) if len(hist_volumes) >= 20 else hist_volumes[-1] if len(hist_volumes) > 0 else 0
-                
-                # Build complete feature vector matching model's expected features
-                features = np.zeros(len(self.model.model_features))
-                for idx, feature_name in enumerate(self.model.model_features):
-                    if 'Return_Lag_1' in feature_name:
-                        features[idx] = return_lag_1
-                    elif 'Return_Lag_3' in feature_name:
-                        features[idx] = return_lag_3
-                    elif 'Return_Lag_5' in feature_name:
-                        features[idx] = return_lag_5
-                    elif 'Log_Return' in feature_name:
-                        features[idx] = return_lag_1
-                    elif 'Volatility' in feature_name:
-                        features[idx] = volatility
-                    elif 'RSI' in feature_name:
-                        features[idx] = rsi / 100.0  # Normalize to 0-1
-                    elif 'Price_Momentum' in feature_name:
-                        features[idx] = price_momentum
-                    elif 'BB_Width' in feature_name:
-                        features[idx] = bb_width
-                    elif 'High' in feature_name:
-                        features[idx] = high_20
-                    elif 'Low' in feature_name:
-                        features[idx] = low_20
-                    elif 'Close_Lag_1' in feature_name:
-                        features[idx] = hist_prices[-2] if len(hist_prices) >= 2 else current_price
-                    elif 'SMA_5' in feature_name:
-                        features[idx] = sma_5
-                    elif 'SMA_10' in feature_name:
-                        features[idx] = sma_10
-                    elif 'SMA_20' in feature_name:
-                        features[idx] = sma_20
-                    elif 'Volume' in feature_name:
-                        features[idx] = avg_volume
-                    elif 'VIX' in feature_name or 'SPY' in feature_name:
-                        features[idx] = volatility * 100  # Market proxy
-                    else:
-                        features[idx] = current_price
-                
-                # Get real ML prediction using timeframe-specific XGBoost model
-                if hasattr(self.model, 'timeframe_models'):
-                    if asset_class == "crypto":
-                        model_class = 'Crypto'
-                    elif asset_class == "stocks":
-                        model_class = 'Stocks'
-                    else:
-                        model_class = 'Macro'
-                    
-                    timeframe_model_data = self.model.timeframe_models.get(model_class, {}).get(timeframe, {})
-                    if timeframe_model_data and 'model' in timeframe_model_data:
-                        model_to_use = timeframe_model_data['model']
-                    else:
-                        model_to_use = self.model.xgb_model
-                else:
-                    model_to_use = self.model.xgb_model
-                
-                xgb_prediction = model_to_use.predict(features.reshape(1, -1))[0]
-                predicted_price = current_price * (1 + xgb_prediction)
-                
-                # Determine direction and confidence based on prediction strength
-                if xgb_prediction > 0.01:
-                    forecast_direction = 'UP'
-                elif xgb_prediction < -0.01:
-                    forecast_direction = 'DOWN'
-                else:
-                    forecast_direction = 'HOLD'
-                
-                # Confidence based on volatility and prediction strength
-                prediction_strength = abs(xgb_prediction) * 200
-                confidence = max(50, min(95, int(75 + prediction_strength - volatility * 100)))
+                # Skip if no range predictions from model
+                if 'range_low' not in prediction_result or 'range_high' not in prediction_result:
+                    continue
                 
                 predictions.append({
-                    'timestamp': data[i]['timestamp'],  # FIXED: Use future timestamp being predicted
+                    'timestamp': data[i]['timestamp'],
                     'actual_price': current_price,
-                    'predicted_price': predicted_price,
-                    'forecast_direction': forecast_direction,
-                    'confidence': confidence,
-                    'trend_score': int(xgb_prediction * 100),
-                    'rsi': rsi,
-                    'volatility': volatility
+                    'predicted_price': prediction_result['predicted_price'],
+                    'range_low': prediction_result['range_low'],
+                    'range_high': prediction_result['range_high'],
+                    'forecast_direction': prediction_result['forecast_direction'],
+                    'confidence': prediction_result['confidence'],
+                    'trend_score': int((prediction_result['predicted_price'] - current_price) / current_price * 100),
+                    'rsi': 50,
+                    'volatility': 0.02
                 })
+                
+                # Fallback if raw model fails
+                continue
                 
             except Exception as e:
                 continue
@@ -561,8 +436,10 @@ class GapFillingService:
         return predictions
     
     async def _predict_with_raw_models_historical(self, symbol, timeframe, current_price, hist_prices, asset_class):
-        """Use raw models for historical predictions"""
+        """Use raw models for historical predictions (crypto/stock/macro)"""
         try:
+            macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+            
             # Select appropriate model
             if asset_class == 'crypto' and self.model.crypto_raw_models:
                 models = self.model.crypto_raw_models
@@ -571,6 +448,9 @@ class GapFillingService:
                 # Map gap filling timeframes to trained model keys
                 timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
                 timeframe = timeframe_map.get(timeframe, timeframe)
+            elif symbol in macro_symbols and self.model.macro_models:
+                models = self.model.macro_models
+                timeframe = '1D'  # Macro only supports 1D
             else:
                 return None
             
@@ -579,34 +459,62 @@ class GapFillingService:
             
             model_data = models[symbol][timeframe]
             
-            # Calculate features from historical data
+            # Calculate features based on asset type
             df = pd.DataFrame({'close': hist_prices})
-            df['sma_5'] = df['close'].rolling(5).mean()
-            df['sma_20'] = df['close'].rolling(20).mean()
-            df['price_sma5_ratio'] = df['close'] / df['sma_5']
-            df['price_sma20_ratio'] = df['close'] / df['sma_20']
-            df['returns'] = df['close'].pct_change()
-            df['returns_5'] = df['close'].pct_change(5)
             
-            delta = df['close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            rs = gain / loss
-            df['rsi'] = 100 - (100 / (1 + rs))
-            
-            df['momentum_7'] = df['close'] / df['close'].shift(7)
-            df['volatility'] = df['returns'].rolling(10).std()
-            
-            latest = df.iloc[-1]
-            features = {
-                'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
-                'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
-                'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
-                'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
-                'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
-                'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
-                'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
-            }
+            if asset_class == 'macro':
+                # Macro features
+                df['change_1'] = df['close'].pct_change(1)
+                df['change_4'] = df['close'].pct_change(4)
+                df['ma_4'] = df['close'].rolling(4).mean()
+                df['ma_12'] = df['close'].rolling(12).mean()
+                df['trend'] = (df['close'] - df['ma_12']) / df['ma_12']
+                df['volatility'] = df['change_1'].rolling(12).std()
+                df['lag_1'] = df['close'].shift(1)
+                df['lag_4'] = df['close'].shift(4)
+                df['change_lag_1'] = df['change_1'].shift(1)
+                
+                latest = df.iloc[-1]
+                features = {
+                    'lag_1': float(latest['lag_1']) if pd.notna(latest['lag_1']) else current_price,
+                    'lag_4': float(latest['lag_4']) if pd.notna(latest['lag_4']) else current_price,
+                    'ma_4': float(latest['ma_4']) if pd.notna(latest['ma_4']) else current_price,
+                    'ma_12': float(latest['ma_12']) if pd.notna(latest['ma_12']) else current_price,
+                    'change_1': float(latest['change_1']) if pd.notna(latest['change_1']) else 0.0,
+                    'change_4': float(latest['change_4']) if pd.notna(latest['change_4']) else 0.0,
+                    'change_lag_1': float(latest['change_lag_1']) if pd.notna(latest['change_lag_1']) else 0.0,
+                    'trend': float(latest['trend']) if pd.notna(latest['trend']) else 0.0,
+                    'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.01,
+                    'quarter': 1  # Default quarter
+                }
+            else:
+                # Crypto/Stock features
+                df['sma_5'] = df['close'].rolling(5).mean()
+                df['sma_20'] = df['close'].rolling(20).mean()
+                df['price_sma5_ratio'] = df['close'] / df['sma_5']
+                df['price_sma20_ratio'] = df['close'] / df['sma_20']
+                df['returns'] = df['close'].pct_change()
+                df['returns_5'] = df['close'].pct_change(5)
+                
+                delta = df['close'].diff()
+                gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+                loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+                rs = gain / loss
+                df['rsi'] = 100 - (100 / (1 + rs))
+                
+                df['momentum_7'] = df['close'] / df['close'].shift(7)
+                df['volatility'] = df['returns'].rolling(10).std()
+                
+                latest = df.iloc[-1]
+                features = {
+                    'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
+                    'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
+                    'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
+                    'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
+                    'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
+                    'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
+                    'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
+                }
             
             # Create feature vector
             feature_vector = np.zeros(len(model_data['features']))
@@ -616,21 +524,43 @@ class GapFillingService:
             # Scale and predict
             features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
             price_change = model_data['price_model'].predict(features_scaled)[0]
-            range_high = model_data['high_model'].predict(features_scaled)[0]
-            range_low = model_data['low_model'].predict(features_scaled)[0]
-            confidence = model_data['confidence_model'].predict(features_scaled)[0]
+            
+            if asset_class == 'macro':
+                range_low = model_data['lower_model'].predict(features_scaled)[0]
+                range_high = model_data['upper_model'].predict(features_scaled)[0]
+            else:
+                range_high = model_data['high_model'].predict(features_scaled)[0]
+                range_low = model_data['low_model'].predict(features_scaled)[0]
             
             # Clip predictions
             if asset_class == 'crypto':
                 price_change = np.clip(price_change, -0.15, 0.15)
                 range_high = np.clip(range_high, -0.1, 0.2)
                 range_low = np.clip(range_low, -0.2, 0.1)
-            else:
+            elif asset_class == 'stocks':
                 price_change = np.clip(price_change, -0.1, 0.1)
                 range_high = np.clip(range_high, -0.05, 0.1)
                 range_low = np.clip(range_low, -0.1, 0.05)
+            else:  # macro
+                price_change = np.clip(price_change, -0.05, 0.05)
+                range_low = np.clip(range_low, -0.08, 0.08)
+                range_high = np.clip(range_high, -0.08, 0.08)
             
-            confidence = np.clip(confidence, 60, 95)
+            # Calculate confidence
+            range_width = abs(range_high - range_low)
+            model_r2 = model_data['metrics'].get('price_r2', 0)
+            
+            if model_r2 > 0.2:
+                base_confidence = 75
+            elif model_r2 > 0.1:
+                base_confidence = 70
+            elif model_r2 > 0:
+                base_confidence = 65
+            else:
+                base_confidence = 60
+            
+            confidence = base_confidence - (range_width * 100)
+            confidence = np.clip(confidence, 50, 90)
             
             predicted_price = current_price * (1 + price_change)
             high_price = current_price * (1 + range_high)
@@ -639,7 +569,13 @@ class GapFillingService:
             if low_price > high_price:
                 low_price, high_price = high_price, low_price
             
-            threshold = 0.005 if asset_class == 'crypto' else 0.003
+            if asset_class == 'crypto':
+                threshold = 0.005
+            elif asset_class == 'stocks':
+                threshold = 0.003
+            else:  # macro
+                threshold = 0.001
+            
             direction = 'UP' if price_change > threshold else 'DOWN' if price_change < -threshold else 'HOLD'
             
             return {

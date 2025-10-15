@@ -41,47 +41,26 @@ class MobileMLModel:
         self.cache_ttl = 1  # 1 second cache for real-time updates
         self.prediction_semaphore = asyncio.Semaphore(5)  # Limit concurrent predictions
         
-        # Load models directly - REQUIRED
-        try:
-            import joblib
-            import yfinance as yf
-            import requests
-            
-            # Use new specialized model
-            model_path = os.path.join('models', 'specialized_trading_model.pkl')
-            
-            # Download model from Google Drive if not exists locally
-            if not os.path.exists(model_path):
-                self._download_model_from_drive(model_path)
-            
-            # Verify model file exists and is valid
-            if not os.path.exists(model_path):
-                raise Exception(f"Model file not found: {model_path}")
-            
-            file_size = os.path.getsize(model_path)
-            if file_size < 1000:
-                raise Exception(f"Model file too small ({file_size} bytes), download may have failed")
-            
-            self.mobile_model = joblib.load(model_path)
-            print(f"✅ Specialized model loaded from {model_path} ({file_size} bytes)")
-            
-            # Store all timeframe models
-            if hasattr(self.mobile_model, 'models'):
-                self.timeframe_models = self.mobile_model.models
-                # Default to 1D model for backward compatibility
-                if 'Crypto' in self.timeframe_models:
-                    crypto_1d = self.timeframe_models['Crypto'].get('1D', {})
-                    self.xgb_model = crypto_1d.get('model')
-                    self.model_features = crypto_1d.get('features', [])
-            else:
-                raise Exception("Specialized model structure not found")
-        except Exception as e:
-            raise Exception(f"❌ CRITICAL: Specialized model failed to load: {str(e)}")
+        # Load macro models
+        self.macro_models = None
+        macro_model_path = 'models/macro/macro_range_models.pkl'
         
-        # Load new raw models - ALWAYS use raw models for crypto/stocks
-        self.use_legacy_model = os.getenv('USE_LEGACY_MODEL', 'false').lower() == 'true'
-        self.use_raw_models = True  # Always enabled
-        self.raw_model_priority = True  # Always prioritize raw models
+        if not os.path.exists(macro_model_path):
+            macro_url = os.getenv('MACRO_MODEL_URL')
+            if macro_url:
+                print(f"📥 Downloading macro models...")
+                self._download_raw_model(macro_url, macro_model_path, 'macro')
+        
+        if os.path.exists(macro_model_path):
+            try:
+                import joblib
+                self.macro_models = joblib.load(macro_model_path)
+                print(f"✅ Macro models loaded")
+            except Exception as e:
+                print(f"⚠️ Macro models failed to load: {e}")
+        
+        # Always use raw models for all asset types
+        self.use_raw_models = True
         
         self.crypto_raw_models = None
         self.stock_raw_models = None
@@ -118,7 +97,7 @@ class MobileMLModel:
         except Exception as e:
             raise Exception(f"❌ CRITICAL: Stock raw models failed: {e}")
         
-        print(f"🔧 Model Configuration: Legacy={self.use_legacy_model}, Raw={self.use_raw_models}, Priority={'Raw' if self.raw_model_priority else 'Legacy'}")
+        print(f"🔧 Model Configuration: Crypto={bool(self.crypto_raw_models)}, Stock={bool(self.stock_raw_models)}, Macro={bool(self.macro_models)}")
         
         # Use centralized cache manager with priority system
         from utils.cache_manager import CacheManager, CacheKeys, CacheTTL, PredictionPriority
@@ -129,7 +108,7 @@ class MobileMLModel:
         
         print(f"🔧 ML Predictor initialized: min_interval={self.min_request_interval*1000:.0f}ms, cache_ttl={self.cache_ttl}s")
     
-    def _download_model_from_drive(self, model_path):
+    def _download_model_from_drive_old(self, model_path):
         """Download model from Google Drive with virus scan bypass"""
         try:
             file_id = "10uBJLKsijJHDFBOhCsyFFi-1DAhamjez"
@@ -224,183 +203,17 @@ class MobileMLModel:
         
         async with self.prediction_semaphore:
             
-            # Determine asset class
-            asset_class = 'Crypto' if symbol in CRYPTO_SYMBOLS else 'Stocks' if symbol in STOCK_SYMBOLS else 'Macro'
-            
-            # Use raw models for crypto and stocks
-            if asset_class in ['Crypto', 'Stocks']:
-                try:
-                    raw_result = await self._predict_with_raw_models(symbol, timeframe)
-                    if raw_result:
-                        # Use priority-based TTL
-                        ttl = self.prediction_priority.get_cache_ttl(symbol)
-                        self.cache_manager.set_cache(cache_key, raw_result, ttl)
-                        return raw_result
-                except Exception as raw_e:
-                    raise Exception(f"Raw model prediction failed for {symbol}: {raw_e}")
-            
-            # Use specialized model only for macro indicators
-            if asset_class != 'Macro':
-                raise Exception(f"No model available for {symbol} ({asset_class})")
-            
+            # Use raw models for all asset types
             try:
-                # Get real data with faster timeout
-                price_start = time.time()
-                try:
-                    real_price = await asyncio.wait_for(self._get_real_price(symbol), timeout=2.0)
-                    if not real_price:
-                        raise Exception("No price data available")
-                except (asyncio.TimeoutError, Exception) as e:
-                    raise Exception(f"Failed to get real price data for {symbol}: {e}")
-                
-                current_price = real_price
-                try:
-                    change_24h = await asyncio.wait_for(self._get_real_change(symbol), timeout=1.0)
-                    data_source = 'ML Analysis'
-                except (asyncio.TimeoutError, Exception) as e:
-                    raise Exception(f"Failed to get 24h change for {symbol}: {e}")
-            
-                real_prices = self._get_real_historical_prices(symbol)
-                if not real_prices or len(real_prices) < 10:
-                    raise Exception(f"Insufficient historical price data for {symbol}: need at least 10 points, got {len(real_prices) if real_prices else 0}")
-            
-                # Ensure current price is the latest
-                real_prices.append(current_price)
-                real_prices = real_prices[-30:]  # Keep last 30 days
-            
-                # Create feature vector using real market data
-                features = np.zeros(len(self.model_features))
-            
-                # Calculate real returns from historical prices
-                if len(real_prices) >= 2:
-                    log_return = np.log(real_prices[-1] / real_prices[-2])
-                else:
-                    log_return = 0.0
-            
-                # Calculate real technical indicators from historical data
-                returns = np.diff(np.log(real_prices)) if len(real_prices) >= 2 else [0]
-                volatility = np.std(returns) if len(returns) >= 2 else 0.015
-            
-                # Calculate RSI from real price movements
-                def calculate_rsi(prices, period=14):
-                    if len(prices) < period + 1:
-                        return 50.0
-                    deltas = np.diff(prices)
-                    gains = np.where(deltas > 0, deltas, 0)
-                    losses = np.where(deltas < 0, -deltas, 0)
-                    avg_gain = np.mean(gains[-period:])
-                    avg_loss = np.mean(losses[-period:])
-                    if avg_loss == 0:
-                        return 100.0
-                    rs = avg_gain / avg_loss
-                    return 100 - (100 / (1 + rs))
-                
-                rsi = calculate_rsi(real_prices)
-            
-                # Fill features with real market-based values
-                feature_idx = 0
-                for feature_name in self.model_features:
-                    if feature_idx >= len(features):
-                        break
-                        
-                    if 'Return_Lag_1' in feature_name:
-                        features[feature_idx] = returns[-1] if len(returns) >= 1 else 0
-                    elif 'Return_Lag_3' in feature_name:
-                        features[feature_idx] = returns[-3] if len(returns) >= 3 else 0
-                    elif 'Return_Lag_5' in feature_name:
-                        features[feature_idx] = returns[-5] if len(returns) >= 5 else 0
-                    elif 'Log_Return' in feature_name:
-                        features[feature_idx] = log_return
-                    elif 'Volatility' in feature_name:
-                        features[feature_idx] = volatility
-                    elif 'RSI' in feature_name:
-                        features[feature_idx] = rsi
-                    elif 'Price_Momentum' in feature_name:
-                        features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
-                    elif feature_name == 'High':
-                        features[feature_idx] = np.max(real_prices[-5:]) if len(real_prices) >= 5 else current_price
-                    elif 'Close_Lag_1' in feature_name:
-                        features[feature_idx] = real_prices[-2] if len(real_prices) >= 2 else current_price
-                    elif 'BB_Width' in feature_name:
-                        features[feature_idx] = volatility * 2
-                    elif 'VIX' in feature_name:
-                        features[feature_idx] = volatility * 100
-                    elif 'SPY' in feature_name:
-                        features[feature_idx] = np.mean(returns[-5:]) if len(returns) >= 5 else 0
-                    else:
-                        if feature_idx == 0:
-                            features[feature_idx] = current_price
-                        elif feature_idx == 1:
-                            features[feature_idx] = change_24h
-                        elif feature_idx == 2:
-                            features[feature_idx] = np.mean(real_prices[-5:]) if len(real_prices) >= 5 else current_price
-                        elif feature_idx == 3:
-                            features[feature_idx] = np.mean(real_prices[-10:]) if len(real_prices) >= 10 else current_price
-                        elif feature_idx == 4:
-                            features[feature_idx] = volatility
-                        else:
-                            idx = min(feature_idx - 4, len(real_prices) - 1)
-                            features[feature_idx] = real_prices[-idx-1] if idx >= 0 else current_price
-                    
-                    feature_idx += 1
-            
-                # Get timeframe-specific specialized model (macro only)
-                
-                if hasattr(self, 'timeframe_models') and asset_class in self.timeframe_models:
-                    timeframe_model_data = self.timeframe_models[asset_class].get(timeframe, {})
-                    if timeframe_model_data and 'model' in timeframe_model_data:
-                        model_to_use = timeframe_model_data['model']
-                    else:
-                        model_to_use = self.xgb_model
-                else:
-                    model_to_use = self.xgb_model
-            
-                # Real ML prediction with timeframe-specific model
-                xgb_prediction = model_to_use.predict(features.reshape(1, -1))[0]
-                predicted_price = current_price * (1 + xgb_prediction)
-                
-                # Dynamic confidence based on multiple factors
-                volatility_factor = abs(change_24h) * 0.5
-                prediction_strength = abs(xgb_prediction) * 200
-                
-                # Base confidence varies by symbol type
-                if symbol in ['BTC', 'ETH']:
-                    base_confidence = 75
-                elif symbol in ['USDT', 'USDC']:
-                    base_confidence = 90
-                else:
-                    base_confidence = 70
-                
-                # Confidence based on real volatility (lower volatility = higher confidence)
-                confidence = base_confidence + prediction_strength - volatility_factor - (volatility * 100)
-                confidence = min(95, max(50, confidence))
-                
-                # logging.info(f"🔥 REAL DATA: {symbol} price=${current_price} from API, ML prediction={xgb_prediction:.4f}")
-                
-                forecast = {
-                    'forecast_direction': 'UP' if xgb_prediction > 0.01 else 'DOWN' if xgb_prediction < -0.01 else 'HOLD',
-                    'confidence': int(confidence),
-                    'trend_score': int(xgb_prediction * 100)
-                }
-                
-                result = {
-                    'symbol': symbol,
-                    'timeframe': timeframe,
-                    'current_price': round(current_price, 2),
-                    'predicted_price': round(predicted_price, 2),
-                    'forecast_direction': forecast['forecast_direction'],
-                    'confidence': forecast['confidence'],
-                    'change_24h': round(change_24h, 2),
-                    'data_source': data_source
-                }
-                
-                # Use priority-based TTL
-                ttl = self.prediction_priority.get_cache_ttl(symbol)
-                self.cache_manager.set_cache(cache_key, result, ttl)
-                return result
-            
+                result = await self._predict_with_raw_models(symbol, timeframe)
+                if result:
+                    ttl = self.prediction_priority.get_cache_ttl(symbol)
+                    self.cache_manager.set_cache(cache_key, result, ttl)
+                    return result
             except Exception as e:
-                raise Exception(f"Specialized model prediction failed for {symbol}: {str(e)}")
+                raise Exception(f"Prediction failed for {symbol}: {e}")
+            
+            raise Exception(f"No model available for {symbol}")
     
     def predict_for_timestamp(self, symbol, timestamp):
         """Generate ML prediction for specific timestamp"""
@@ -687,9 +500,11 @@ class MobileMLModel:
             }
     
     async def _predict_with_raw_models(self, symbol, timeframe='1D'):
-        """Predict using new raw models (crypto/stock)"""
+        """Predict using raw models (crypto/stock/macro)"""
         try:
             # Determine asset type and select appropriate model
+            macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+            
             if symbol in CRYPTO_SYMBOLS and self.crypto_raw_models:
                 models = self.crypto_raw_models
                 asset_type = 'crypto'
@@ -699,8 +514,12 @@ class MobileMLModel:
                 # Map API timeframes to trained model keys
                 timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
                 timeframe = timeframe_map.get(timeframe, timeframe)
+            elif symbol in macro_symbols and self.macro_models:
+                models = self.macro_models
+                asset_type = 'macro'
+                timeframe = '1D'  # Macro only supports 1D
             else:
-                raise Exception(f"No raw models available for {symbol}")
+                raise Exception(f"No models available for {symbol}")
             
             # Check if symbol and timeframe exist in models
             if symbol not in models:
@@ -710,7 +529,13 @@ class MobileMLModel:
                 raise Exception(f"Timeframe {timeframe} not found for {symbol} in {asset_type} raw models")
             
             model_data = models[symbol][timeframe]
-            required_keys = ['price_model', 'high_model', 'low_model', 'confidence_model', 'scaler', 'features']
+            
+            # Check required keys based on asset type
+            if asset_type == 'macro':
+                required_keys = ['price_model', 'lower_model', 'upper_model', 'scaler', 'features']
+            else:
+                required_keys = ['price_model', 'high_model', 'low_model', 'scaler', 'features']
+            
             if not all(key in model_data for key in required_keys):
                 raise Exception(f"Incomplete model data for {symbol}:{timeframe}")
             
@@ -721,8 +546,12 @@ class MobileMLModel:
             if not current_price:
                 raise Exception(f"No current price available for {symbol}")
             
-            # Calculate raw features for the model
-            features = await self._calculate_raw_features(symbol, current_price, asset_type)
+            # Calculate features based on asset type
+            if asset_type == 'macro':
+                features = await self._calculate_macro_features(symbol, current_price)
+            else:
+                features = await self._calculate_raw_features(symbol, current_price, asset_type)
+            
             if features is None:
                 raise Exception(f"Failed to calculate features for {symbol}")
             
@@ -739,25 +568,47 @@ class MobileMLModel:
             if np.any(np.isnan(feature_vector)):
                 raise Exception(f"NaN values in feature vector for {symbol}")
             
-            # Scale features and predict (exact match to test files)
+            # Scale features and predict
             features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
             
             price_change = model_data['price_model'].predict(features_scaled)[0]
-            range_high = model_data['high_model'].predict(features_scaled)[0]
-            range_low = model_data['low_model'].predict(features_scaled)[0]
-            confidence = model_data['confidence_model'].predict(features_scaled)[0]
             
-            # Clip predictions (exact match to test files)
+            if asset_type == 'macro':
+                range_low = model_data['lower_model'].predict(features_scaled)[0]
+                range_high = model_data['upper_model'].predict(features_scaled)[0]
+            else:
+                range_high = model_data['high_model'].predict(features_scaled)[0]
+                range_low = model_data['low_model'].predict(features_scaled)[0]
+            
+            # Clip predictions based on asset type
             if asset_type == 'crypto':
-                price_change = np.clip(price_change, -0.15, 0.15)  # ±15% for crypto
-                range_high = np.clip(range_high, -0.1, 0.2)        # -10% to +20%
-                range_low = np.clip(range_low, -0.2, 0.1)          # -20% to +10%
-            else:  # stocks
-                price_change = np.clip(price_change, -0.1, 0.1)    # ±10% for stocks
-                range_high = np.clip(range_high, -0.05, 0.1)       # -5% to +10%
-                range_low = np.clip(range_low, -0.1, 0.05)         # -10% to +5%
+                price_change = np.clip(price_change, -0.15, 0.15)
+                range_high = np.clip(range_high, -0.1, 0.2)
+                range_low = np.clip(range_low, -0.2, 0.1)
+            elif asset_type == 'stock':
+                price_change = np.clip(price_change, -0.1, 0.1)
+                range_high = np.clip(range_high, -0.05, 0.1)
+                range_low = np.clip(range_low, -0.1, 0.05)
+            else:  # macro
+                price_change = np.clip(price_change, -0.05, 0.05)
+                range_low = np.clip(range_low, -0.08, 0.08)
+                range_high = np.clip(range_high, -0.08, 0.08)
             
-            confidence = np.clip(confidence, 60, 95)
+            # Calculate confidence based on range width and model performance
+            range_width = abs(range_high - range_low)
+            model_r2 = model_data['metrics'].get('price_r2', 0)
+            
+            if model_r2 > 0.2:
+                base_confidence = 75
+            elif model_r2 > 0.1:
+                base_confidence = 70
+            elif model_r2 > 0:
+                base_confidence = 65
+            else:
+                base_confidence = 60
+            
+            confidence = base_confidence - (range_width * 100)
+            confidence = np.clip(confidence, 50, 90)
             
             predicted_price = current_price * (1 + price_change)
             high_price = current_price * (1 + range_high)
@@ -767,8 +618,14 @@ class MobileMLModel:
             if low_price > high_price:
                 low_price, high_price = high_price, low_price
             
-            # Direction threshold (exact match to test files)
-            threshold = 0.005 if asset_type == 'crypto' else 0.003
+            # Direction threshold
+            if asset_type == 'crypto':
+                threshold = 0.005
+            elif asset_type == 'stock':
+                threshold = 0.003
+            else:  # macro
+                threshold = 0.001
+            
             if price_change > threshold:
                 direction = 'UP'
             elif price_change < -threshold:
@@ -776,17 +633,21 @@ class MobileMLModel:
             else:
                 direction = 'HOLD'
             
+            # Format predicted range
+            predicted_range = multi_asset.format_predicted_range(symbol, low_price, high_price)
+            
             result = {
                 'symbol': symbol,
                 'timeframe': timeframe,
                 'current_price': round(current_price, 2),
                 'predicted_price': round(predicted_price, 2),
+                'predicted_range': predicted_range,
                 'range_low': round(low_price, 2),
                 'range_high': round(high_price, 2),
                 'forecast_direction': direction,
                 'confidence': int(confidence),
                 'change_24h': round(change_24h, 2),
-                'data_source': f'Raw {asset_type.title()} Model'
+                'data_source': f'{asset_type.title()} ML Model'
             }
             
             return result
@@ -797,25 +658,19 @@ class MobileMLModel:
     async def _calculate_raw_features(self, symbol, current_price, asset_type):
         """Calculate raw features matching training pattern"""
         try:
-            # Get historical prices
             historical_prices = self._get_real_historical_prices(symbol)
             if not historical_prices or len(historical_prices) < 20:
                 raise Exception(f"Insufficient historical data: {len(historical_prices) if historical_prices else 0} points")
             
-            # Create DataFrame matching training format
-            import pandas as pd
             df = pd.DataFrame({'close': historical_prices})
             
-            # Calculate raw features (exact match to training)
             df['sma_5'] = df['close'].rolling(5).mean()
             df['sma_20'] = df['close'].rolling(20).mean()
             df['price_sma5_ratio'] = df['close'] / df['sma_5']
             df['price_sma20_ratio'] = df['close'] / df['sma_20']
-            
             df['returns'] = df['close'].pct_change()
             df['returns_5'] = df['close'].pct_change(5)
             
-            # RSI calculation (exact match to training)
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
@@ -825,10 +680,8 @@ class MobileMLModel:
             df['momentum_7'] = df['close'] / df['close'].shift(7)
             df['volatility'] = df['returns'].rolling(10).std()
             
-            # Get latest values
             latest = df.iloc[-1]
             
-            # Handle NaN values (exact match to test files)
             features = {
                 'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
                 'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
@@ -843,3 +696,65 @@ class MobileMLModel:
             
         except Exception as e:
             raise Exception(f"Feature calculation failed for {symbol}: {e}")
+    
+    async def _calculate_macro_features(self, symbol, current_price):
+        """Calculate macro features matching training pattern"""
+        try:
+            from fredapi import Fred
+            from datetime import datetime
+            
+            fred_series = {
+                'GDP': 'GDP',
+                'CPI': 'CPIAUCSL',
+                'UNEMPLOYMENT': 'UNRATE',
+                'FED_RATE': 'FEDFUNDS',
+                'CONSUMER_CONFIDENCE': 'UMCSENT'
+            }
+            
+            series_id = fred_series.get(symbol)
+            if not series_id:
+                raise Exception(f"Unknown macro symbol: {symbol}")
+            
+            fred_api_key = os.getenv('FRED_API_KEY')
+            if not fred_api_key:
+                raise Exception("FRED_API_KEY not found")
+            
+            fred = Fred(api_key=fred_api_key)
+            data = fred.get_series(series_id)
+            
+            if data is None or len(data) < 20:
+                raise Exception(f"Insufficient FRED data for {symbol}")
+            
+            df = pd.DataFrame({'timestamp': data.index, 'close': data.values})
+            df = df.dropna().tail(20)
+            
+            df['change_1'] = df['close'].pct_change(1)
+            df['change_4'] = df['close'].pct_change(4)
+            df['ma_4'] = df['close'].rolling(4).mean()
+            df['ma_12'] = df['close'].rolling(12).mean()
+            df['trend'] = (df['close'] - df['ma_12']) / df['ma_12']
+            df['volatility'] = df['change_1'].rolling(12).std()
+            df['quarter'] = df['timestamp'].dt.quarter
+            df['lag_1'] = df['close'].shift(1)
+            df['lag_4'] = df['close'].shift(4)
+            df['change_lag_1'] = df['change_1'].shift(1)
+            
+            latest = df.iloc[-1]
+            
+            features = {
+                'lag_1': float(latest['lag_1']) if pd.notna(latest['lag_1']) else current_price,
+                'lag_4': float(latest['lag_4']) if pd.notna(latest['lag_4']) else current_price,
+                'ma_4': float(latest['ma_4']) if pd.notna(latest['ma_4']) else current_price,
+                'ma_12': float(latest['ma_12']) if pd.notna(latest['ma_12']) else current_price,
+                'change_1': float(latest['change_1']) if pd.notna(latest['change_1']) else 0.0,
+                'change_4': float(latest['change_4']) if pd.notna(latest['change_4']) else 0.0,
+                'change_lag_1': float(latest['change_lag_1']) if pd.notna(latest['change_lag_1']) else 0.0,
+                'trend': float(latest['trend']) if pd.notna(latest['trend']) else 0.0,
+                'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.01,
+                'quarter': int(latest['quarter'])
+            }
+            
+            return features
+            
+        except Exception as e:
+            raise Exception(f"Macro feature calculation failed for {symbol}: {e}")
