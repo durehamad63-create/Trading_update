@@ -212,16 +212,16 @@ class MultiAssetSupport:
             logging.error(f"FRED API failed for {symbol}: {e}")
             raise Exception(f"Cannot get real macro data for {symbol}: FRED API failed - {e}")
     
-    def format_predicted_range(self, symbol, predicted_price):
+    def format_predicted_range(self, symbol, low_price, high_price):
         """Format predicted range based on asset type"""
         if symbol == 'GDP':
-            return f'${predicted_price*0.98:.0f}B–${predicted_price*1.02:.0f}B'
+            return f'${low_price:.0f}B–${high_price:.0f}B'
         elif symbol in ['CPI', 'CONSUMER_CONFIDENCE']:
-            return f'{predicted_price*0.98:.1f}–{predicted_price*1.02:.1f}'
+            return f'{low_price:.1f}–{high_price:.1f}'
         elif symbol in ['UNEMPLOYMENT', 'FED_RATE']:
-            return f'{predicted_price*0.98:.2f}%–{predicted_price*1.02:.2f}%'
+            return f'{low_price:.2f}%–{high_price:.2f}%'
         else:
-            return f'${predicted_price*0.98:.2f}–${predicted_price*1.02:.2f}'
+            return f'${low_price:.2f}–${high_price:.2f}'
     
     def get_asset_name(self, symbol):
         """Get full name for asset using centralized configuration"""
