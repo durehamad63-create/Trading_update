@@ -142,6 +142,7 @@ class TradingDatabase:
                 await conn.execute("ALTER TABLE actual_prices ALTER COLUMN symbol TYPE VARCHAR(30)")
                 await conn.execute("ALTER TABLE forecasts ALTER COLUMN symbol TYPE VARCHAR(30)")
                 await conn.execute("ALTER TABLE user_favorites ALTER COLUMN symbol TYPE VARCHAR(30)")
+                await conn.execute("ALTER TABLE forecast_accuracy ALTER COLUMN symbol TYPE VARCHAR(30)")
             except Exception as e:
                 pass
             
@@ -149,7 +150,7 @@ class TradingDatabase:
             await conn.execute("""
                 CREATE TABLE IF NOT EXISTS forecast_accuracy (
                     id SERIAL PRIMARY KEY,
-                    symbol VARCHAR(10) NOT NULL,
+                    symbol VARCHAR(30) NOT NULL,
                     forecast_id INTEGER REFERENCES forecasts(id) UNIQUE,
                     actual_direction VARCHAR(10),
                     result VARCHAR(10), -- 'Hit' or 'Miss'

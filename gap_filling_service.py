@@ -28,7 +28,7 @@ class GapFillingService:
         # Only native API intervals - no synthetic aggregation
         self.crypto_timeframes = ['1h', '4h', '1D', '1W', '1M']  # Binance native
         self.stock_timeframes = ['1h', '1D', '1W', '1M']  # Yahoo native (removed 4H, 7D)
-        self.macro_timeframes = ['1D', '1W', '1M']  # FRED native (removed 7D)
+        self.macro_timeframes = ['1D']  # FRED native - macro only supports daily (real release dates)
         
         # Maintain exactly 200 records per timeframe
         self.max_records = 200
