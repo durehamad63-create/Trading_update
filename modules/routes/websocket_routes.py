@@ -172,69 +172,66 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     except Exception as e:
                         logger.error(f"Database error for {symbol}: {e}")
                 
-                # Timeframe mapping: query stored predictions from finer timeframe models
-                timeframe_mapping = {
-                    '1D': {'model_tf': '1h', 'steps': 12},  # 12 hourly predictions
-                    '1W': {'model_tf': '1D', 'steps': 4},   # 4 daily predictions
-                    '1M': {'model_tf': '1W', 'steps': 7},   # 7 weekly predictions
-                    '1h': {'model_tf': '1h', 'steps': 12},  # 12 hourly predictions
-                    '4h': {'model_tf': '4h', 'steps': 6}    # 6 4-hour predictions
-                }
-                
-                mapping = timeframe_mapping.get(timeframe, {'model_tf': timeframe, 'steps': 1})
-                model_timeframe = mapping['model_tf']
-                num_steps = mapping['steps']
-                
-                current_price = prediction.get('current_price', 0)
-                
-                # Query stored predictions from database for finer timeframe
-                future_prices = []
+                # Multi-step prediction with caching
                 from datetime import timedelta
-                
-                if database and database.pool and num_steps > 1:
-                    try:
-                        from config.symbol_manager import symbol_manager
-                        db_key = symbol_manager.get_db_key(symbol, model_timeframe)
-                        
-                        async with database.pool.acquire() as conn:
-                            # Get last N stored predictions from finer timeframe
-                            # created_at is the future timestamp being predicted (from gap filling)
-                            rows = await conn.fetch(
-                                "SELECT predicted_price, created_at FROM forecasts WHERE symbol = $1 AND created_at >= NOW() - INTERVAL '24 hours' ORDER BY created_at DESC LIMIT $2",
-                                db_key, num_steps
-                            )
-                            
-                            if rows and len(rows) >= num_steps:
-                                # Use stored predictions in chronological order
-                                future_prices = [float(row['predicted_price']) for row in reversed(rows)]
-                                # Update timestamps with prediction times (created_at = future time)
-                                for row in reversed(rows):
-                                    timestamps.append(row['created_at'].isoformat())
-                            else:
-                                # Fallback: not enough stored predictions
-                                future_prices = [prediction.get('predicted_price', current_price)]
-                    except Exception as e:
-                        logger.error(f"Database query error: {e}")
-                        future_prices = [prediction.get('predicted_price', current_price)]
-                else:
-                    # Single step prediction
-                    future_prices = [prediction.get('predicted_price', current_price)]
-                
-                # Get forecast direction from prediction
-                forecast_direction = prediction.get('forecast_direction', 'HOLD')
-                if not future_prices:
-                    future_prices = [prediction.get('predicted_price', current_price)]
+                current_price = prediction.get('current_price', 0)
+                predicted_price = prediction.get('predicted_price', current_price)
                 
                 # Check if macro indicator
                 macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
                 is_macro = symbol in macro_symbols
+                
+                future_prices = []
+                future_timestamps = []
+                
+                if is_macro:
+                    # Macro: single prediction
+                    future_prices = [predicted_price]
+                    future_timestamps = []
+                else:
+                    # Use multi-step predictor
+                    timeframe_steps = {
+                        '1D': 12,  # 12 hourly predictions
+                        '1W': 7,   # 7 daily predictions
+                        '1M': 4,   # 4 weekly predictions
+                        '1h': 12,  # 12 hourly predictions
+                        '4h': 6    # 6 4-hour predictions
+                    }
+                    
+                    num_steps = timeframe_steps.get(timeframe, 1)
+                    
+                    if num_steps > 1:
+                        try:
+                            from multistep_predictor import multistep_predictor
+                            if multistep_predictor:
+                                multistep_data = await multistep_predictor.get_multistep_forecast(symbol, timeframe, num_steps)
+                                if multistep_data:
+                                    future_prices = multistep_data['prices']
+                                    future_timestamps = multistep_data['timestamps']
+                                else:
+                                    future_prices = [predicted_price]
+                                    future_timestamps = []
+                            else:
+                                future_prices = [predicted_price]
+                                future_timestamps = []
+                        except:
+                            future_prices = [predicted_price]
+                            future_timestamps = []
+                    else:
+                        future_prices = [predicted_price]
+                        future_timestamps = []
+                
+                # Combine timestamps
+                if future_timestamps:
+                    timestamps.extend(future_timestamps)
+                
+                forecast_direction = prediction.get('forecast_direction', 'HOLD')
                 
                 chart_update = {
                     "type": "chart_update",
                     "symbol": symbol,
                     "name": multi_asset.get_asset_name(symbol),
                     "timeframe": timeframe,
-                    "model_timeframe": model_timeframe,
                     "prediction_steps": len(future_prices),
                     "forecast_direction": forecast_direction,
                     "confidence": prediction.get('confidence', 75),
@@ -247,9 +244,9 @@ def setup_websocket_routes(app: FastAPI, model, database):
                         "timestamps": timestamps
                     },
                     "update_count": update_count,
-                    "data_source": f"Stored {model_timeframe} predictions" if len(future_prices) > 1 else "Real-time ML prediction",
+                    "data_source": "Multi-step ML prediction" if len(future_prices) > 1 else "Real-time ML prediction",
                     "prediction_updated": True,
-                    "next_prediction_update": (WebSocketSecurity.get_utc_now() + timedelta(minutes=24)).isoformat(),
+                    "next_prediction_update": (WebSocketSecurity.get_utc_now() + timedelta(minutes=5)).isoformat(),
                     "forecast_stable": forecast_direction == 'HOLD',
                 }
                 
