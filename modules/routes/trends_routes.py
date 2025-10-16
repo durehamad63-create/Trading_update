@@ -46,22 +46,40 @@ def setup_trends_routes(app: FastAPI, model, database):
         async with database.pool.acquire() as conn:
             db_symbol = symbol_manager.get_db_key(symbol, db_timeframe)
             
-            # Query with JOIN to get matching actual-forecast pairs
-            rows = await conn.fetch("""
-                SELECT 
-                    ap.price as actual_price,
-                    ap.timestamp,
-                    f.predicted_price
-                FROM actual_prices ap
-                LEFT JOIN forecasts f ON 
-                    f.symbol = ap.symbol AND
-                    DATE(f.created_at) = DATE(ap.timestamp)
-                WHERE ap.symbol = $1
-                ORDER BY ap.timestamp DESC
-                LIMIT 50
-            """, db_symbol)
+            # Query with JOIN - get one record per unique date/hour/period
+            # Use DISTINCT ON to get latest record per time period
+            if db_timeframe in ['1H', '4H']:
+                # For hourly/4H: group by hour boundary
+                rows = await conn.fetch("""
+                    SELECT DISTINCT ON (DATE_TRUNC('hour', ap.timestamp))
+                        ap.price as actual_price,
+                        ap.timestamp,
+                        f.predicted_price
+                    FROM actual_prices ap
+                    LEFT JOIN forecasts f ON 
+                        f.symbol = ap.symbol AND
+                        DATE_TRUNC('hour', f.created_at) = DATE_TRUNC('hour', ap.timestamp)
+                    WHERE ap.symbol = $1
+                    ORDER BY DATE_TRUNC('hour', ap.timestamp) DESC, ap.timestamp DESC
+                    LIMIT 50
+                """, db_symbol)
+            else:
+                # For daily/weekly/monthly: group by date
+                rows = await conn.fetch("""
+                    SELECT DISTINCT ON (DATE(ap.timestamp))
+                        ap.price as actual_price,
+                        ap.timestamp,
+                        f.predicted_price
+                    FROM actual_prices ap
+                    LEFT JOIN forecasts f ON 
+                        f.symbol = ap.symbol AND
+                        DATE(f.created_at) = DATE(ap.timestamp)
+                    WHERE ap.symbol = $1
+                    ORDER BY DATE(ap.timestamp) DESC, ap.timestamp DESC
+                    LIMIT 50
+                """, db_symbol)
             
-            print(f"📊 DEBUG: Found {len(rows)} actual-forecast pairs for {db_symbol}")
+            print(f"📊 DEBUG: Found {len(rows)} unique time periods for {db_symbol}")
             
             if not rows:
                 print(f"❌ No historical data found for {db_symbol}")

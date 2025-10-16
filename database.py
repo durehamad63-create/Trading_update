@@ -182,7 +182,7 @@ class TradingDatabase:
                 pass  # Index already exists
     
     async def store_forecast(self, db_key, forecast_data, timeframe='1D'):
-        """Store forecast prediction - VALIDATES REAL DATA ONLY"""
+        """Store forecast prediction - ONE FORECAST PER TIME PERIOD"""
         if not self.pool:
             return None
         
@@ -191,18 +191,51 @@ class TradingDatabase:
         if not data_validator.validate_forecast_data(forecast_data):
             logging.warning(f"Invalid forecast data rejected for {db_key}")
             return None
+        
+        # Round timestamp to time period boundary
+        timestamp = datetime.now()
+        rounded_timestamp = self._round_timestamp_for_timeframe(timestamp, timeframe)
             
         async with self.pool.acquire() as conn:
-            return await conn.fetchval("""
-                INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, trend_score)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                RETURNING id
-            """, db_key, forecast_data['forecast_direction'], forecast_data['confidence'],
-                forecast_data.get('predicted_price'), forecast_data.get('predicted_range'),
-                forecast_data.get('trend_score'))
+            # Check if forecast already exists for this time period
+            existing = await conn.fetchval("""
+                SELECT id FROM forecasts 
+                WHERE symbol = $1 AND DATE(created_at) = DATE($2)
+            """, db_key, rounded_timestamp)
+            
+            if existing:
+                # Update existing forecast
+                await conn.execute("""
+                    UPDATE forecasts SET
+                        forecast_direction = $2,
+                        confidence = $3,
+                        predicted_price = $4,
+                        predicted_range = $5,
+                        trend_score = $6
+                    WHERE id = $1
+                """, existing,
+                    forecast_data['forecast_direction'],
+                    forecast_data['confidence'],
+                    forecast_data.get('predicted_price'),
+                    forecast_data.get('predicted_range'),
+                    forecast_data.get('trend_score'))
+                return existing
+            else:
+                # Insert new forecast
+                return await conn.fetchval("""
+                    INSERT INTO forecasts (symbol, forecast_direction, confidence, predicted_price, predicted_range, trend_score, created_at)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    RETURNING id
+                """, db_key, 
+                    forecast_data['forecast_direction'], 
+                    forecast_data['confidence'],
+                    forecast_data.get('predicted_price'), 
+                    forecast_data.get('predicted_range'),
+                    forecast_data.get('trend_score'),
+                    rounded_timestamp)
     
     async def store_actual_price(self, db_key, price_data, timeframe='1D'):
-        """Store actual market price with OHLC data - VALIDATES REAL DATA ONLY"""
+        """Store actual market price with OHLC data - ONE RECORD PER TIME PERIOD"""
         if not self.pool:
             return
         
@@ -223,23 +256,46 @@ class TradingDatabase:
             
         async with self.pool.acquire() as conn:
             try:
-                await conn.execute("""
-                    INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, close_price, price, change_24h, volume, timestamp)
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    ON CONFLICT (symbol, timestamp) DO UPDATE SET
-                        price = EXCLUDED.price,
-                        change_24h = EXCLUDED.change_24h,
-                        volume = EXCLUDED.volume,
-                        high = GREATEST(actual_prices.high, EXCLUDED.high),
-                        low = LEAST(actual_prices.low, EXCLUDED.low),
-                        close_price = EXCLUDED.close_price
-                """, db_key, timeframe, 
-                    price_data.get('open_price'), price_data.get('high'), 
-                    price_data.get('low'), price_data.get('close_price'),
-                    price_data['current_price'], price_data.get('change_24h'), 
-                    price_data.get('volume'), rounded_timestamp)
+                # Check if record already exists for this time period
+                existing = await conn.fetchval("""
+                    SELECT id FROM actual_prices 
+                    WHERE symbol = $1 AND timestamp = $2
+                """, db_key, rounded_timestamp)
+                
+                if existing:
+                    # Update existing record with latest data (OHLC aggregation)
+                    await conn.execute("""
+                        UPDATE actual_prices SET
+                            price = $3,
+                            close_price = $4,
+                            high = GREATEST(high, $5),
+                            low = LEAST(low, $6),
+                            volume = volume + $7,
+                            change_24h = $8
+                        WHERE id = $1
+                    """, existing, 
+                        price_data['current_price'],
+                        price_data.get('close_price', price_data['current_price']),
+                        price_data.get('high', price_data['current_price']),
+                        price_data.get('low', price_data['current_price']),
+                        price_data.get('volume', 0),
+                        price_data.get('change_24h', 0))
+                else:
+                    # Insert new record
+                    await conn.execute("""
+                        INSERT INTO actual_prices (symbol, timeframe, open_price, high, low, close_price, price, change_24h, volume, timestamp)
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    """, db_key, timeframe, 
+                        price_data.get('open_price', price_data['current_price']),
+                        price_data.get('high', price_data['current_price']), 
+                        price_data.get('low', price_data['current_price']),
+                        price_data.get('close_price', price_data['current_price']),
+                        price_data['current_price'], 
+                        price_data.get('change_24h', 0), 
+                        price_data.get('volume', 0), 
+                        rounded_timestamp)
             except Exception as e:
-                # Silently handle duplicates for high-frequency data
+                # Silently handle errors
                 if "duplicate key" not in str(e).lower():
                     pass
     
