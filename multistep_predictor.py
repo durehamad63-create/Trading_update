@@ -28,51 +28,117 @@ class MultiStepPredictor:
         return result
     
     async def _generate_multistep(self, symbol, timeframe, num_steps):
-        """Generate iterative forward predictions"""
+        """Generate autoregressive multi-step predictions"""
         try:
-            # Get base prediction
-            base_pred = await self.ml_model.predict(symbol, timeframe)
-            if not base_pred:
+            # Get historical prices for feature calculation
+            historical_prices = self.ml_model._get_real_historical_prices(symbol)
+            if not historical_prices or len(historical_prices) < 20:
                 return None
             
-            current_price = base_pred['current_price']
-            predictions = []
-            timestamps = []
-            
-            # Time delta based on forecast route mapping
-            # 1D forecast = 12 hourly steps, 1W = 7 daily steps, etc.
+            # Time deltas
             time_deltas = {
                 '1h': timedelta(hours=1),
                 '4h': timedelta(hours=4),
-                '1D': timedelta(hours=1),  # 1D forecast uses hourly steps
-                '1W': timedelta(days=1),   # 1W forecast uses daily steps
-                '1M': timedelta(weeks=1)   # 1M forecast uses weekly steps
+                '1D': timedelta(days=1),
+                '1W': timedelta(weeks=1),
+                '1M': timedelta(days=30)
             }
             
             delta = time_deltas.get(timeframe, timedelta(hours=1))
             current_time = datetime.now()
             
-            # Use base prediction as first step
-            predictions.append(base_pred['predicted_price'])
-            timestamps.append(current_time.isoformat())
+            predictions = []
+            timestamps = []
             
-            # Generate remaining steps with decay
-            for i in range(1, num_steps):
-                # Apply decay to prediction confidence
-                decay_factor = 0.95 ** i
-                price_change = (predictions[-1] - current_price) / current_price
-                
-                # Dampen future predictions
-                next_price = current_price * (1 + price_change * decay_factor)
-                predictions.append(round(next_price, 2))
-                
-                current_time += delta
-                timestamps.append(current_time.isoformat())
+            # Start with real historical data
+            price_history = list(historical_prices[-30:])  # Last 30 points
+            
+            # Autoregressive prediction: each step uses previous predictions
+            for i in range(num_steps):
+                try:
+                    # Calculate features from current history (real + predicted)
+                    import pandas as pd
+                    df = pd.DataFrame({'close': price_history})
+                    
+                    df['sma_5'] = df['close'].rolling(5, min_periods=1).mean()
+                    df['sma_20'] = df['close'].rolling(20, min_periods=1).mean()
+                    df['price_sma5_ratio'] = df['close'] / df['sma_5']
+                    df['price_sma20_ratio'] = df['close'] / df['sma_20']
+                    df['returns'] = df['close'].pct_change()
+                    df['returns_5'] = df['close'].pct_change(5)
+                    
+                    delta_col = df['close'].diff()
+                    gain = (delta_col.where(delta_col > 0, 0)).rolling(14, min_periods=1).mean()
+                    loss = (-delta_col.where(delta_col < 0, 0)).rolling(14, min_periods=1).mean()
+                    rs = gain / loss
+                    df['rsi'] = 100 - (100 / (1 + rs))
+                    
+                    df['momentum_7'] = df['close'] / df['close'].shift(7)
+                    df['volatility'] = df['returns'].rolling(10, min_periods=1).std()
+                    
+                    latest = df.iloc[-1]
+                    
+                    features = {
+                        'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
+                        'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
+                        'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
+                        'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
+                        'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
+                        'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
+                        'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
+                    }
+                    
+                    # Get model and predict
+                    from config.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS
+                    if symbol in CRYPTO_SYMBOLS:
+                        models = self.ml_model.crypto_raw_models
+                    elif symbol in STOCK_SYMBOLS:
+                        models = self.ml_model.stock_raw_models
+                    else:
+                        return None
+                    
+                    if not models or symbol not in models or timeframe not in models[symbol]:
+                        return None
+                    
+                    model_data = models[symbol][timeframe]
+                    
+                    # Create feature vector
+                    feature_vector = np.zeros(len(model_data['features']))
+                    for j, feature_name in enumerate(model_data['features']):
+                        feature_vector[j] = features.get(feature_name, 0.0)
+                    
+                    # Scale and predict
+                    features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
+                    price_change = model_data['price_model'].predict(features_scaled)[0]
+                    
+                    # Clip prediction
+                    if symbol in CRYPTO_SYMBOLS:
+                        price_change = np.clip(price_change, -0.15, 0.15)
+                    else:
+                        price_change = np.clip(price_change, -0.1, 0.1)
+                    
+                    # Calculate next price
+                    current_price = price_history[-1]
+                    next_price = current_price * (1 + price_change)
+                    
+                    predictions.append(round(next_price, 2))
+                    timestamps.append((current_time + delta * (i + 1)).isoformat())
+                    
+                    # Append prediction to history for next iteration
+                    price_history.append(next_price)
+                    
+                except Exception as e:
+                    # Fallback: use last prediction
+                    if predictions:
+                        predictions.append(predictions[-1])
+                        timestamps.append((current_time + delta * (i + 1)).isoformat())
+                    else:
+                        return None
             
             return {
                 'prices': predictions,
                 'timestamps': timestamps,
-                'base_confidence': base_pred['confidence']
+                'base_confidence': 75
             }
             
         except Exception as e:

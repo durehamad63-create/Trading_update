@@ -215,22 +215,22 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     future_prices = [predicted_price]
                     future_timestamps = []
                 else:
-                    # Use multi-step predictor
+                    # Use multi-step predictor based on MODEL timeframe
                     timeframe_steps = {
-                        '1D': 12,  # 12 hourly predictions
-                        '1W': 7,   # 7 daily predictions
-                        '1M': 4,   # 4 weekly predictions
                         '1h': 12,  # 12 hourly predictions
-                        '4h': 6    # 6 4-hour predictions
+                        '4h': 6,   # 6 4-hour predictions
+                        '1D': 7,   # 7 daily predictions
+                        '1W': 4,   # 4 weekly predictions
+                        '1M': 3    # 3 monthly predictions
                     }
                     
-                    num_steps = timeframe_steps.get(timeframe, 1)
+                    num_steps = timeframe_steps.get(model_timeframe, 1)
                     
                     if num_steps > 1:
                         try:
                             from multistep_predictor import multistep_predictor
                             if multistep_predictor:
-                                multistep_data = await multistep_predictor.get_multistep_forecast(symbol, timeframe, num_steps)
+                                multistep_data = await multistep_predictor.get_multistep_forecast(symbol, model_timeframe, num_steps)
                                 if multistep_data:
                                     future_prices = multistep_data['prices']
                                     future_timestamps = multistep_data['timestamps']
