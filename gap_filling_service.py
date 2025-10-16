@@ -391,10 +391,12 @@ class GapFillingService:
         # Use raw models for all asset types (crypto/stock/macro)
         use_raw_models = True
         
-        for i in range(30, len(data) - 1):  # Stop at len-1 to have next_actual
+        # Generate predictions for all available data (need at least 20 points for features)
+        min_history = 20
+        for i in range(min_history, len(data) - 1):  # Stop at len-1 to have next_actual
             try:
-                hist_prices = np.array([d['close'] for d in data[max(0, i-30):i]])
-                if len(hist_prices) < 20:
+                hist_prices = np.array([d['close'] for d in data[max(0, i-min_history):i]])
+                if len(hist_prices) < min_history:
                     continue
                 
                 current_price = hist_prices[-1]
@@ -441,7 +443,7 @@ class GapFillingService:
             elif asset_class == 'stocks' and self.model.stock_raw_models:
                 models = self.model.stock_raw_models
                 # Map gap filling timeframes to trained model keys
-                timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1d', '1M': '1mo'}
+                timeframe_map = {'1h': '60m', '1D': '1d', '1W': '1wk', '1M': '1mo'}
                 timeframe = timeframe_map.get(timeframe, timeframe)
             elif symbol in macro_symbols and self.model.macro_models:
                 models = self.model.macro_models
