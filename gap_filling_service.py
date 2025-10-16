@@ -435,6 +435,16 @@ class GapFillingService:
     async def _predict_with_raw_models_historical(self, symbol, timeframe, current_price, hist_prices, asset_class):
         """Use raw models for historical predictions (crypto/stock/macro)"""
         try:
+            # Stablecoins: hardcoded $1.00 prediction
+            if symbol in ['USDT', 'USDC']:
+                return {
+                    'predicted_price': 1.00,
+                    'range_low': 1.00,
+                    'range_high': 1.00,
+                    'forecast_direction': 'HOLD',
+                    'confidence': 99
+                }
+            
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
             
             # Select appropriate model
