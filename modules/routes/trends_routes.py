@@ -70,6 +70,11 @@ def setup_trends_routes(app: FastAPI, model, database):
                 date_key = f['created_at'].date()
                 forecast_map[date_key] = float(f['predicted_price'])
             
+            print(f"📊 DEBUG: Found {len(actual_rows)} actual prices, {len(forecast_rows)} forecasts")
+            print(f"📊 DEBUG: Forecast dates: {list(forecast_map.keys())[:5]}")
+            if actual_rows:
+                print(f"📊 DEBUG: Actual dates: {[a['timestamp'].date() for a in list(actual_rows)[:5]]}")
+            
             # Combine actual and predicted (reverse to chronological order)
             rows = []
             for a in reversed(actual_rows):
@@ -86,6 +91,7 @@ def setup_trends_routes(app: FastAPI, model, database):
             
             print(f"✅ Found {len(rows)} historical records for {db_symbol}")
             
+            matched_count = 0
             for record in rows:
                 price = float(record['actual_price'])
                 if data_validator.validate_price(symbol, price):
@@ -94,8 +100,11 @@ def setup_trends_routes(app: FastAPI, model, database):
                     
                     if record['predicted_price']:
                         predicted_prices.append(float(record['predicted_price']))
+                        matched_count += 1
                     else:
                         predicted_prices.append(None)
+            
+            print(f"📊 DEBUG: Matched {matched_count} actual-forecast pairs out of {len(rows)} records")
         
         # Build accuracy history and filter valid pairs
         accuracy_history = []
