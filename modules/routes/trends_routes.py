@@ -46,21 +46,21 @@ def setup_trends_routes(app: FastAPI, model, database):
         async with database.pool.acquire() as conn:
             db_symbol = symbol_manager.get_db_key(symbol, db_timeframe)
             
-            # Query actual prices
+            # Query actual prices (get latest 50)
             actual_rows = await conn.fetch("""
                 SELECT price, timestamp
                 FROM actual_prices
                 WHERE symbol = $1
-                ORDER BY timestamp ASC
+                ORDER BY timestamp DESC
                 LIMIT 50
             """, db_symbol)
             
-            # Query forecasts separately
+            # Query forecasts separately (get latest 50)
             forecast_rows = await conn.fetch("""
                 SELECT predicted_price, created_at
                 FROM forecasts
                 WHERE symbol = $1
-                ORDER BY created_at ASC
+                ORDER BY created_at DESC
                 LIMIT 50
             """, db_symbol)
             
@@ -70,9 +70,9 @@ def setup_trends_routes(app: FastAPI, model, database):
                 date_key = f['created_at'].date()
                 forecast_map[date_key] = float(f['predicted_price'])
             
-            # Combine actual and predicted
+            # Combine actual and predicted (reverse to chronological order)
             rows = []
-            for a in actual_rows:
+            for a in reversed(actual_rows):
                 date_key = a['timestamp'].date()
                 rows.append({
                     'actual_price': a['price'],
