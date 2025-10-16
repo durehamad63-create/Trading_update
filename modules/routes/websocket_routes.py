@@ -168,9 +168,12 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 
                 update_count += 1
                 
+                # Map display timeframes to model timeframes
+                model_timeframe = {'7D': '1W', '1Y': '1W', '5Y': '1M'}.get(timeframe, timeframe)
+                
                 # Get prediction
                 try:
-                    prediction = await model.predict(symbol, timeframe)
+                    prediction = await model.predict(symbol, model_timeframe)
                 except Exception as e:
                     logger.error(f"Prediction error for {symbol}: {e}")
                     continue
@@ -182,7 +185,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 if database and database.pool:
                     try:
                         from config.symbol_manager import symbol_manager
-                        db_key = symbol_manager.get_db_key(symbol, timeframe)
+                        db_key = symbol_manager.get_db_key(symbol, model_timeframe)
                         
                         async with database.pool.acquire() as conn:
                             rows = await conn.fetch(
