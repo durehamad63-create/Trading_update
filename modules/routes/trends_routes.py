@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from datetime import datetime
 from config.symbol_manager import symbol_manager
 from modules.data_validator import data_validator
+from utils.interval_formatter import interval_formatter
 
 def setup_trends_routes(app: FastAPI, model, database):
     
@@ -116,8 +117,11 @@ def setup_trends_routes(app: FastAPI, model, database):
             error_pct = abs(actual - predicted) / actual * 100 if actual > 0 else 0
             result = 'Hit' if error_pct < 5 else 'Miss'
             
+            # Format timestamp based on timeframe interval
+            formatted_time = interval_formatter.format_timestamp(timestamps[i], timeframe_normalized)
+            
             accuracy_history.append({
-                'date': timestamps[i][:10],
+                'date': formatted_time,
                 'actual': round(actual, 2),
                 'predicted': round(predicted, 2),
                 'result': result,
