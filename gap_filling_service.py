@@ -686,9 +686,6 @@ class GapFillingService:
                         INSERT INTO forecasts (symbol, predicted_price, confidence, 
                                              forecast_direction, trend_score, created_at)
                         VALUES ($1, $2, $3, $4, $5, $6)
-                        ON CONFLICT (symbol, created_at) DO UPDATE SET
-                            predicted_price = EXCLUDED.predicted_price,
-                            confidence = EXCLUDED.confidence
                     """, db_key, pred['predicted_price'], pred['confidence'],
                          pred['forecast_direction'], pred['trend_score'], normalized_ts)
                     pred_count += 1
