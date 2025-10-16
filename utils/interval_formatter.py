@@ -20,9 +20,8 @@ class IntervalFormatter:
             # Daily intervals: Oct 01, Oct 02
             return dt.strftime('%b %d')
         elif timeframe == '1M':
-            # Weekly intervals: Week 1, Week 2
-            week_num = (dt.day - 1) // 7 + 1
-            return f"Week {week_num}"
+            # Monthly intervals: Sep 2021, Oct 2021
+            return dt.strftime('%b %Y')
         else:
             return dt.strftime('%Y-%m-%d %H:%M')
     
@@ -35,7 +34,7 @@ class IntervalFormatter:
             '1D': 'Daily intervals',
             '7D': 'Daily intervals',
             '1W': 'Daily intervals',
-            '1M': 'Weekly intervals'
+            '1M': 'Monthly intervals'
         }
         return intervals.get(timeframe, 'Custom intervals')
 
