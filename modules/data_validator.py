@@ -9,27 +9,8 @@ from typing import List, Dict, Optional
 class DataValidator:
     """Validates and sanitizes time series data for trends"""
     
-    # Realistic price ranges for validation (updated for 2024)
-    PRICE_RANGES = {
-        'BTC': {'min': 15000, 'max': 150000},
-        'ETH': {'min': 1000, 'max': 10000},
-        'BNB': {'min': 200, 'max': 800},
-        'SOL': {'min': 10, 'max': 300},
-        'XRP': {'min': 0.3, 'max': 3.0},
-        'DOGE': {'min': 0.05, 'max': 0.5},
-        'ADA': {'min': 0.2, 'max': 3.0},
-        'TRX': {'min': 0.05, 'max': 0.3},
-        'USDT': {'min': 0.99, 'max': 1.01},
-        'USDC': {'min': 0.99, 'max': 1.01},
-        # Stocks
-        'NVDA': {'min': 100, 'max': 1500},
-        'MSFT': {'min': 200, 'max': 600},
-        'AAPL': {'min': 100, 'max': 300},
-        'GOOGL': {'min': 80, 'max': 200},
-        'AMZN': {'min': 80, 'max': 250},
-        'META': {'min': 100, 'max': 600},
-        'TSLA': {'min': 100, 'max': 500},
-    }
+    # No price range restrictions - accept any positive price
+    PRICE_RANGES = {}
     
     # Maximum allowed price change between consecutive points
     MAX_CHANGE_PCT = {
@@ -43,16 +24,8 @@ class DataValidator:
     
     @classmethod
     def validate_price(cls, symbol: str, price: float) -> bool:
-        """Validate if price is within realistic range"""
-        if price <= 0:
-            return False
-        
-        ranges = cls.PRICE_RANGES.get(symbol)
-        if not ranges:
-            # For unknown symbols, just check if positive
-            return price > 0
-        
-        return ranges['min'] <= price <= ranges['max']
+        """Validate if price is positive"""
+        return price > 0
     
     @classmethod
     def validate_price_series(cls, symbol: str, prices: List[float], timeframe: str = '1D') -> List[bool]:
