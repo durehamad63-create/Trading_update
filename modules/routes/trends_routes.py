@@ -46,53 +46,29 @@ def setup_trends_routes(app: FastAPI, model, database):
         async with database.pool.acquire() as conn:
             db_symbol = symbol_manager.get_db_key(symbol, db_timeframe)
             
-            # Query actual prices (get latest 50)
-            actual_rows = await conn.fetch("""
-                SELECT price, timestamp
-                FROM actual_prices
-                WHERE symbol = $1
-                ORDER BY timestamp DESC
+            # Query with JOIN to get matching actual-forecast pairs
+            rows = await conn.fetch("""
+                SELECT 
+                    ap.price as actual_price,
+                    ap.timestamp,
+                    f.predicted_price
+                FROM actual_prices ap
+                LEFT JOIN forecasts f ON 
+                    f.symbol = ap.symbol AND
+                    DATE(f.created_at) = DATE(ap.timestamp)
+                WHERE ap.symbol = $1
+                ORDER BY ap.timestamp DESC
                 LIMIT 50
             """, db_symbol)
             
-            # Query forecasts separately (get latest 50)
-            forecast_rows = await conn.fetch("""
-                SELECT predicted_price, created_at
-                FROM forecasts
-                WHERE symbol = $1
-                ORDER BY created_at DESC
-                LIMIT 50
-            """, db_symbol)
-            
-            # Build lookup for forecasts by date
-            forecast_map = {}
-            for f in forecast_rows:
-                date_key = f['created_at'].date()
-                forecast_map[date_key] = float(f['predicted_price'])
-            
-            print(f"📊 DEBUG: Found {len(actual_rows)} actual prices, {len(forecast_rows)} forecasts")
-            print(f"📊 DEBUG: Forecast dates: {list(forecast_map.keys())[:5]}")
-            if actual_rows:
-                print(f"📊 DEBUG: Actual dates: {[a['timestamp'].date() for a in list(actual_rows)[:5]]}")
-            
-            # Combine actual and predicted (reverse to chronological order)
-            rows = []
-            for a in reversed(actual_rows):
-                date_key = a['timestamp'].date()
-                rows.append({
-                    'actual_price': a['price'],
-                    'timestamp': a['timestamp'],
-                    'predicted_price': forecast_map.get(date_key)
-                })
+            print(f"📊 DEBUG: Found {len(rows)} actual-forecast pairs for {db_symbol}")
             
             if not rows:
                 print(f"❌ No historical data found for {db_symbol}")
                 return {'error': 'No historical data available'}
             
-            print(f"✅ Found {len(rows)} historical records for {db_symbol}")
-            
-            matched_count = 0
-            for record in rows:
+            # Reverse to chronological order and extract data
+            for record in reversed(rows):
                 price = float(record['actual_price'])
                 if data_validator.validate_price(symbol, price):
                     actual_prices.append(price)
@@ -100,11 +76,11 @@ def setup_trends_routes(app: FastAPI, model, database):
                     
                     if record['predicted_price']:
                         predicted_prices.append(float(record['predicted_price']))
-                        matched_count += 1
                     else:
                         predicted_prices.append(None)
             
-            print(f"📊 DEBUG: Matched {matched_count} actual-forecast pairs out of {len(rows)} records")
+            matched_count = sum(1 for p in predicted_prices if p is not None)
+            print(f"📊 DEBUG: {matched_count} matched pairs out of {len(rows)} records")
         
         # Build accuracy history and filter valid pairs
         accuracy_history = []
