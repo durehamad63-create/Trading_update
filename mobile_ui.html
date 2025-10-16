@@ -939,13 +939,23 @@
             });
         });
 
-        // Timeframe switching
+        // Timeframe switching via WebSocket message
         document.querySelectorAll('.timeframe-tab').forEach(tab => {
             tab.addEventListener('click', () => {
                 document.querySelectorAll('.timeframe-tab').forEach(t => t.classList.remove('active'));
                 tab.classList.add('active');
                 currentTimeframe = tab.dataset.timeframe;
-                if (currentSymbol) {
+                
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    // Send timeframe change via WebSocket
+                    const message = {
+                        type: 'change_timeframe',
+                        timeframe: currentTimeframe
+                    };
+                    ws.send(JSON.stringify(message));
+                    log('Sent timeframe change', message);
+                } else if (currentSymbol) {
+                    // Fallback: reconnect with new timeframe
                     loadChartData(currentSymbol, currentTimeframe);
                     connectWebSocket(currentSymbol, currentTimeframe);
                 }

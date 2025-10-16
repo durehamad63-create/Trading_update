@@ -46,7 +46,7 @@ class WebSocketSecurity:
     @staticmethod
     def validate_timeframe(timeframe: str) -> str:
         """Validate and sanitize timeframe"""
-        valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '4H', '1D', '1W', '1M']
+        valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '4H', '1d', '1D', '7D', '1w', '1W', '1wk', '1m', '1M', '1mo', '1Y', '5Y']
         
         if timeframe not in valid_timeframes:
             raise ValueError(f"Invalid timeframe: {timeframe}")
