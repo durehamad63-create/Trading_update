@@ -24,36 +24,25 @@ def setup_market_routes(app: FastAPI, model, database):
             symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX'][:limit]
             for symbol in symbols:
                 try:
-                    # Use cached price from realtime service
-                    price_data = None
-                    if realtime_service and symbol in realtime_service.price_cache:
-                        price_data = realtime_service.price_cache[symbol]
-                    
-                    if not price_data:
-                        cache_key = cache_keys.price(symbol, 'crypto')
-                        price_data = cache_manager.get_cache(cache_key)
-                    
-                    # Fallback to database
-                    if not price_data and database and database.pool:
-                        try:
-                            from config.symbol_manager import symbol_manager
-                            db_key = symbol_manager.get_db_key(symbol, '1D')
-                            async with database.pool.acquire() as conn:
-                                row = await conn.fetchrow(
-                                    "SELECT price, volume, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 1",
-                                    db_key
-                                )
-                                if row:
-                                    price_data = {
-                                        'current_price': float(row['price']),
-                                        'change_24h': 0.0,
-                                        'volume': float(row['volume']) if row['volume'] else 0
-                                    }
-                        except Exception:
-                            pass
-                    
-                    if not price_data:
-                        continue
+                    # Stablecoins: always use fixed price
+                    if symbol in ['USDT', 'USDC']:
+                        price_data = {
+                            'current_price': 1.0,
+                            'change_24h': 0.0,
+                            'volume': 1000000000
+                        }
+                    else:
+                        # Use cached price from realtime service
+                        price_data = None
+                        if realtime_service and symbol in realtime_service.price_cache:
+                            price_data = realtime_service.price_cache[symbol]
+                        
+                        if not price_data:
+                            cache_key = cache_keys.price(symbol, 'crypto')
+                            price_data = cache_manager.get_cache(cache_key)
+                        
+                        if not price_data:
+                            continue
                     
                     # Get prediction from cache (1D timeframe for market summary)
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
@@ -70,19 +59,16 @@ def setup_market_routes(app: FastAPI, model, database):
                     
                     # Use real model range values
                     current_price = price_data['current_price']
-                    range_low = prediction.get('range_low')
-                    range_high = prediction.get('range_high')
+                    range_low = prediction.get('range_low', current_price)
+                    range_high = prediction.get('range_high', current_price)
                     
                     # Format range based on price magnitude
-                    if range_low and range_high:
-                        if current_price >= 1000:
-                            predicted_range = f"${range_low/1000:.1f}k–${range_high/1000:.1f}k"
-                        elif current_price >= 1:
-                            predicted_range = f"${range_low:.2f}–${range_high:.2f}"
-                        else:
-                            predicted_range = f"${range_low:.4f}–${range_high:.4f}"
+                    if current_price >= 1000:
+                        predicted_range = f"${range_low/1000:.1f}k–${range_high/1000:.1f}k"
+                    elif current_price >= 1:
+                        predicted_range = f"${range_low:.2f}–${range_high:.2f}"
                     else:
-                        predicted_range = None
+                        predicted_range = f"${range_low:.4f}–${range_high:.4f}"
                     
                     assets.append({
                         'symbol': symbol,
@@ -237,21 +223,29 @@ def setup_market_routes(app: FastAPI, model, database):
             
             for symbol, asset_class in all_symbols:
                 try:
-                    price_data = None
-                    
-                    if asset_class == 'crypto' and realtime_service:
-                        price_data = realtime_service.price_cache.get(symbol)
-                    elif asset_class == 'stocks' and stock_realtime_service:
-                        price_data = stock_realtime_service.price_cache.get(symbol)
-                    elif asset_class == 'macro' and macro_realtime_service:
-                        price_data = macro_realtime_service.price_cache.get(symbol)
-                    
-                    if not price_data:
-                        cache_key = cache_keys.price(symbol, asset_class)
-                        price_data = cache_manager.get_cache(cache_key)
-                    
-                    if not price_data:
-                        continue
+                    # Stablecoins: always use fixed price
+                    if symbol in ['USDT', 'USDC']:
+                        price_data = {
+                            'current_price': 1.0,
+                            'change_24h': 0.0,
+                            'volume': 1000000000
+                        }
+                    else:
+                        price_data = None
+                        
+                        if asset_class == 'crypto' and realtime_service:
+                            price_data = realtime_service.price_cache.get(symbol)
+                        elif asset_class == 'stocks' and stock_realtime_service:
+                            price_data = stock_realtime_service.price_cache.get(symbol)
+                        elif asset_class == 'macro' and macro_realtime_service:
+                            price_data = macro_realtime_service.price_cache.get(symbol)
+                        
+                        if not price_data:
+                            cache_key = cache_keys.price(symbol, asset_class)
+                            price_data = cache_manager.get_cache(cache_key)
+                        
+                        if not price_data:
+                            continue
                     
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
