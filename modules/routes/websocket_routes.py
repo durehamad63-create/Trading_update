@@ -171,11 +171,19 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 # Map display timeframes to model timeframes
                 model_timeframe = {'7D': '1W', '1Y': '1W', '5Y': '1M'}.get(timeframe, timeframe)
                 
-                # Get prediction
+                # Get prediction with fallback
                 try:
                     prediction = await model.predict(symbol, model_timeframe)
                 except Exception as e:
                     logger.error(f"Prediction error for {symbol}: {e}")
+                    # Send error message to client instead of closing
+                    if websocket.client_state.name == 'CONNECTED':
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "Prediction temporarily unavailable",
+                            "retry_in": 5
+                        }))
+                    await asyncio.sleep(5)
                     continue
                 
                 # Get historical data from database
@@ -240,7 +248,8 @@ def setup_websocket_routes(app: FastAPI, model, database):
                             else:
                                 future_prices = [predicted_price]
                                 future_timestamps = []
-                        except:
+                        except Exception as e:
+                            logger.warning(f"Multistep prediction failed for {symbol}: {e}, using single prediction")
                             future_prices = [predicted_price]
                             future_timestamps = []
                     else:
