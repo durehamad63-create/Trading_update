@@ -680,16 +680,15 @@ class GapFillingService:
                 # Store predictions with conflict handling
                 pred_count = 0
                 for pred in predictions:
-                    # Normalize timestamp for consistency
-                    from utils.timestamp_utils import TimestampUtils
-                    normalized_ts = TimestampUtils.adjust_for_timeframe(pred['timestamp'], timeframe)
+                    # Use original timestamp to preserve historical dates
+                    original_ts = pred['timestamp']
                     
                     await conn.execute("""
                         INSERT INTO forecasts (symbol, predicted_price, confidence, 
                                              forecast_direction, trend_score, created_at)
                         VALUES ($1, $2, $3, $4, $5, $6)
                     """, db_key, pred['predicted_price'], pred['confidence'],
-                         pred['forecast_direction'], pred['trend_score'], normalized_ts)
+                         pred['forecast_direction'], pred['trend_score'], original_ts)
                     pred_count += 1
                 
                 # Store accuracy results with conflict handling

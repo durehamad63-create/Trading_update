@@ -146,16 +146,12 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 "timeframe": timeframe,
                 "message": "WebSocket connected successfully"
             }))
-            logger.info(f"✅ Sent connection message to client for {symbol}")
         except Exception as e:
             logger.error(f"❌ Failed to send connection message: {e}")
             return
         
         update_count = 0
         last_update_time = asyncio.get_event_loop().time()
-        
-        # Small delay to ensure client receives connected message
-        await asyncio.sleep(0.5)
         
         try:
             while True:

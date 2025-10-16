@@ -34,3 +34,4 @@ all_symbols_all_intervals.csv
 crypto_raw_models.pkl
 stock_raw_models.pkl
 macro_range_models.pkl
+*.html
