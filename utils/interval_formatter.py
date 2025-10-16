@@ -14,9 +14,8 @@ class IntervalFormatter:
             # 1-hour intervals: 09:00, 10:00, 11:00
             return dt.strftime('%H:00')
         elif timeframe == '1D':
-            # 4-hour intervals: 00:00, 04:00, 08:00, 12:00, 16:00, 20:00
-            hour = (dt.hour // 4) * 4
-            return f"{hour:02d}:00"
+            # Daily intervals: Aug 28, Aug 29
+            return dt.strftime('%b %d')
         elif timeframe in ['7D', '1W']:
             # Daily intervals: Oct 01, Oct 02
             return dt.strftime('%b %d')
@@ -33,7 +32,7 @@ class IntervalFormatter:
         intervals = {
             '1H': '30-minute intervals',
             '4H': '1-hour intervals',
-            '1D': '4-hour intervals',
+            '1D': 'Daily intervals',
             '7D': 'Daily intervals',
             '1W': 'Daily intervals',
             '1M': 'Weekly intervals'
