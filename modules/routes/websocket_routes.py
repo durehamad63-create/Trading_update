@@ -136,9 +136,22 @@ def setup_websocket_routes(app: FastAPI, model, database):
             return
         
         await websocket.accept()
-        logger.info(f"Chart WebSocket connected: {symbol} (timeframe: {timeframe})")
+        logger.info(f"📊 Chart WebSocket connected: {symbol} (timeframe: {timeframe})")
+        
+        # Send initial connection success message
+        try:
+            await websocket.send_text(json.dumps({
+                "type": "connected",
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "message": "WebSocket connected successfully"
+            }))
+        except Exception as e:
+            logger.error(f"❌ Failed to send connection message: {e}")
+            return
         
         update_count = 0
+        last_update_time = asyncio.get_event_loop().time()
         
         try:
             while True:
@@ -146,7 +159,7 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 if websocket.client_state.name != 'CONNECTED':
                     break
                 
-                # Check for incoming messages (timeframe change)
+                # Check for incoming messages (timeframe change or ping)
                 try:
                     message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
                     data = json.loads(message)
@@ -155,15 +168,27 @@ def setup_websocket_routes(app: FastAPI, model, database):
                         new_timeframe = WebSocketSecurity.validate_timeframe(data.get('timeframe', '1D'))
                         if new_timeframe != timeframe:
                             timeframe = new_timeframe
-                            logger.info(f"Timeframe changed to {timeframe} for {symbol}")
+                            logger.info(f"📊 Timeframe changed to {timeframe} for {symbol}")
                             update_count = 0  # Reset counter
+                            # Send acknowledgment
+                            await websocket.send_text(json.dumps({
+                                "type": "timeframe_changed",
+                                "timeframe": timeframe,
+                                "symbol": symbol
+                            }))
+                    elif data.get('type') == 'ping':
+                        # Respond to ping
+                        await websocket.send_text(json.dumps({"type": "pong"}))
                 except asyncio.TimeoutError:
                     pass  # No message, continue with update
                 except WebSocketDisconnect:
+                    logger.info(f"🔌 Client disconnected: {symbol}")
                     break  # Exit loop on disconnect
                 except json.JSONDecodeError:
+                    logger.warning(f"⚠️ Invalid JSON from client: {symbol}")
                     pass  # Ignore invalid JSON
-                except Exception:
+                except Exception as e:
+                    logger.error(f"❌ Message handling error for {symbol}: {e}")
                     break  # Exit on any other error
                 
                 update_count += 1
@@ -300,9 +325,33 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 
                 # Send chart update
                 if websocket.client_state.name == 'CONNECTED':
-                    await websocket.send_text(json.dumps(chart_update))
+                    try:
+                        await websocket.send_text(json.dumps(chart_update))
+                        last_update_time = asyncio.get_event_loop().time()
+                    except Exception as e:
+                        logger.error(f"❌ Failed to send chart update for {symbol}: {e}")
+                        break
+                
+                # Check if connection is stale
+                current_time = asyncio.get_event_loop().time()
+                if current_time - last_update_time > 60:
+                    logger.warning(f"⏰ Connection stale for {symbol}, closing")
+                    break
         
         except WebSocketDisconnect:
-            logger.info(f"Chart WebSocket disconnected: {symbol}")
+            logger.info(f"❌ Chart WebSocket disconnected: {symbol}")
         except Exception as e:
-            logger.error(f"Chart WebSocket error for {symbol}: {e}", exc_info=True)
+            logger.error(f"⚠️ Chart WebSocket error for {symbol}: {e}", exc_info=True)
+            # Try to send error to client before closing
+            try:
+                if websocket.client_state.name == 'CONNECTED':
+                    await websocket.send_text(json.dumps({
+                        "type": "error",
+                        "message": "Server error occurred",
+                        "details": str(e)
+                    }))
+            except:
+                pass
+
+        finally:
+            logger.info(f"🔒 Chart WebSocket closed: {symbol} (timeframe: {timeframe})")
