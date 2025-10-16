@@ -296,6 +296,8 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     "forecast_direction": forecast_direction,
                     "confidence": prediction.get('confidence', 75),
                     "current_price": current_price,
+                    "predicted_price": predicted_price,
+                    "predicted_range": prediction.get('predicted_range', ''),
                     "change_24h": prediction.get('change_24h', 0),
                     "last_updated": WebSocketSecurity.get_utc_now().isoformat(),
                     "chart": {

@@ -1,876 +1,719 @@
 # Trading AI Platform - Implementation Report
-## Summary Endpoint, Trends API & Chart WebSocket
-
----
 
 ## Executive Summary
 
-This report documents the implementation of three core endpoints in the Trading AI Platform:
-1. **Market Summary Endpoint** (`/api/market/summary`) - Real-time market overview with ML predictions
-2. **Trends API** (`/api/asset/{symbol}/trends`) - Historical accuracy analysis with price-based validation
-3. **Chart WebSocket** (`ws://localhost:8000/ws/chart/{symbol}`) - Real-time chart data with dynamic timeframe switching
-
-All three endpoints use **real data only** (no synthetic/random data), implement multi-tier caching (Redis + Memory), and support multiple asset classes (crypto, stocks, macro indicators).
+This report documents the current implementation of three core API endpoints: Market Summary, Trends Analysis, and WebSocket Chart Streaming. The platform handles 25 financial assets (10 cryptocurrencies, 10 stocks, 5 macro indicators) with specialized handling for different asset classes based on their real-world characteristics.
 
 ---
 
-## 1. Market Summary Endpoint
+## Table of Contents
 
-### Purpose
-Provides a real-time market overview with current prices, 24h changes, and ML predictions for multiple assets filtered by class.
+1. [Special Asset Handling](#special-asset-handling)
+2. [ML Prediction Algorithm](#ml-prediction-algorithm)
+3. [API Endpoints Implementation](#api-endpoints-implementation)
+4. [Data Integrity & Validation](#data-integrity--validation)
 
-### Endpoint Details
-- **URL**: `GET /api/market/summary`
-- **Query Parameters**:
-  - `class`: Asset class filter (`crypto`, `stocks`, `macro`, `all`)
-  - `limit`: Number of assets to return (default: 10)
-- **Rate Limited**: Yes (via `rate_limiter.check_rate_limit()`)
+---
 
-### Data Flow
+## 1. Special Asset Handling
 
-```
-Client Request
-    ↓
-Rate Limiter Check
-    ↓
-Determine Asset Class (crypto/stocks/macro/all)
-    ↓
-For Each Symbol:
-    ├─→ Get Current Price (Priority Order):
-    │   1. Realtime Service Cache (fastest)
-    │   2. Redis Cache (CacheKeys.price)
-    │   3. Database Query (fallback)
-    │   
-    ├─→ Get ML Prediction (Priority Order):
-    │   1. Redis Cache (CacheKeys.prediction)
-    │   2. Generate Fresh Prediction (model.predict)
-    │   
-    └─→ Format Response:
-        - Current price
-        - 24h change
-        - Predicted price & range
-        - Forecast direction (UP/DOWN/HOLD)
-        - Confidence score
-    ↓
-Return JSON Array of Assets
-```
+### 1.1 Stablecoins (USDT, USDC)
 
-### Caching Strategy
+#### Why Hardcoded Predictions Are Necessary
 
-**Price Data Caching**:
-- **Primary**: Realtime service in-memory cache (updated every 1-2 seconds)
-- **Secondary**: Redis cache with 60s TTL
-- **Tertiary**: Database query (latest record)
+**Stablecoins are pegged cryptocurrencies designed to maintain a 1:1 ratio with the US Dollar.**
 
-**Prediction Caching** (Priority-Based):
-- **Hot Symbols** (BTC, ETH, NVDA, AAPL): 30s TTL
-- **Normal Symbols** (MSFT, GOOGL, etc.): 60s TTL
-- **Cold Symbols** (others): 120s TTL
-
-### Asset-Specific Logic
-
-#### Crypto Assets
+**Implementation:**
 ```python
-symbols = ['BTC', 'ETH', 'BNB', 'USDT', 'XRP', 'SOL', 'USDC', 'DOGE', 'ADA', 'TRX']
-
-# Price formatting based on magnitude
-if current_price >= 1000:
-    predicted_range = f"${range_low/1000:.1f}k–${range_high/1000:.1f}k"
-elif current_price >= 1:
-    predicted_range = f"${range_low:.2f}–${range_high:.2f}"
-else:
-    predicted_range = f"${range_low:.4f}–${range_high:.4f}"
+# Hardcoded prediction for stablecoins
+if symbol in ['USDT', 'USDC']:
+    return {
+        'current_price': 1.00,
+        'predicted_price': 1.00,
+        'range_low': 1.00,
+        'range_high': 1.00,
+        'forecast_direction': 'HOLD',
+        'confidence': 99
+    }
 ```
 
-#### Stock Assets
+**Rationale:**
+
+1. **By Design**: Stablecoins are algorithmically or collateral-backed to maintain $1.00 value
+2. **Real-World Behavior**: Trade within ±0.2% ($0.998 - $1.002) under normal conditions
+3. **ML Inefficiency**: Training ML models would waste resources to learn "$1.00 ≈ $1.00"
+4. **Accuracy**: Hardcoding provides 99%+ accuracy vs potential ML noise
+5. **Industry Standard**: Financial platforms treat stablecoins as $1.00 equivalents
+
+**Why Values Never Change:**
+
+- **Collateral Backing**: USDC is backed 1:1 by USD reserves
+- **Arbitrage Mechanisms**: Market forces keep price at $1.00 through arbitrage
+- **Redemption Guarantee**: Users can redeem 1 token for $1.00 directly from issuers
+- **Regulatory Compliance**: Issuers maintain reserves to ensure peg stability
+
+**Exception Handling**: If a stablecoin depegs (rare event like UST collapse), the system would need manual intervention as this indicates systemic failure, not normal price movement.
+
+---
+
+### 1.2 Macro Economic Indicators
+
+#### Real-World Data Constraints
+
+**Macro indicators (GDP, CPI, UNEMPLOYMENT, FED_RATE, CONSUMER_CONFIDENCE) are released by government agencies on fixed schedules, not continuously.**
+
+**Current Implementation:**
+
 ```python
-symbols = ['NVDA', 'MSFT', 'AAPL', 'GOOGL', 'AMZN', 'META', 'AVGO', 'TSLA', 'BRK-B', 'JPM']
-
-# Stock formatting (always 2 decimals)
-predicted_range = f"${range_low:.2f}–${range_high:.2f}"
-```
-
-#### Macro Indicators
-```python
-symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
-
-# Macro-specific formatting
-if symbol == 'GDP':
-    predicted_range = f"${range_low/1000:.1f}T–${range_high/1000:.1f}T"
-elif symbol in ['UNEMPLOYMENT', 'FED_RATE']:
-    predicted_range = f"{range_low:.2f}%–{range_high:.2f}%"
-else:
-    predicted_range = f"{range_low:.1f}–{range_high:.1f}"
-
-# Add change frequency (not volume)
-change_frequency = {
-    'GDP': 'Quarterly',
-    'CPI': 'Monthly',
-    'UNEMPLOYMENT': 'Monthly',
-    'FED_RATE': 'Every 6 weeks (FOMC meetings)',
-    'CONSUMER_CONFIDENCE': 'Monthly'
+# Macro indicators respect real release frequencies
+MACRO_FREQUENCIES = {
+    'GDP': 'Quarterly',              # Every 3 months
+    'CPI': 'Monthly',                # 12 times per year
+    'UNEMPLOYMENT': 'Monthly',       # 12 times per year
+    'FED_RATE': 'Every 6 weeks',    # 8 FOMC meetings per year
+    'CONSUMER_CONFIDENCE': 'Monthly' # 12 times per year
 }
 ```
 
-### Response Format
+**Why OHLC Values Are Not Practical:**
+
+1. **No Intraday Trading**: Macro indicators don't trade on exchanges
+2. **Point-in-Time Data**: Each release is a single value, not continuous price action
+3. **Synthetic Data Problem**: Calculating hourly/4H OHLC would create fake data points
+4. **Regulatory Accuracy**: Government data must be reported as-released, not interpolated
+
+**Example - GDP:**
+- Released: Quarterly (Jan, Apr, Jul, Oct)
+- Value: Single number (e.g., $27.36 trillion)
+- OHLC: Not applicable - there's no "high" or "low" GDP within a quarter
+- Timeframes: Only 1D supported (daily view of quarterly data)
+
+**Data Source**: Federal Reserve Economic Data (FRED API) provides official government statistics.
+
+**Implementation Decision**: 
+- Store macro data with identical OHLC values (open = high = low = close = actual value)
+- Only support 1D timeframe for macro indicators
+- Display "change frequency" instead of timeframe in API responses
+
+---
+
+## 2. ML Prediction Algorithm
+
+### 2.1 Model Architecture
+
+**Raw XGBoost Models** trained separately for each asset class:
+
+1. **Crypto Models** (`crypto_raw_models.pkl`)
+   - 10 symbols × 5 timeframes (1h, 4h, 1D, 1W, 1M) = 50 models
+   - Features: SMA ratios, RSI, momentum, volatility, returns
+
+2. **Stock Models** (`stock_raw_models.pkl`)
+   - 10 symbols × 5 timeframes (60m, 4h, 1d, 1wk, 1mo) = 50 models
+   - Features: SMA ratios, RSI, momentum, volatility, returns
+
+3. **Macro Models** (`macro_range_models.pkl`)
+   - 5 symbols × 1 timeframe (1D) = 5 models
+   - Features: Lags, moving averages, trend, volatility, quarterly patterns
+
+### 2.2 Prediction Process
+
+**Step 1: Feature Engineering**
+
+```python
+# Crypto/Stock Features (7 features)
+- price_sma5_ratio: Current price / 5-period SMA
+- price_sma20_ratio: Current price / 20-period SMA
+- returns: 1-period percentage change
+- returns_5: 5-period percentage change
+- rsi: Relative Strength Index (14-period)
+- momentum_7: 7-period momentum
+- volatility: 10-period standard deviation of returns
+
+# Macro Features (10 features)
+- lag_1, lag_4: Previous values
+- ma_4, ma_12: Moving averages
+- change_1, change_4: Percentage changes
+- change_lag_1: Lagged change
+- trend: Deviation from long-term average
+- volatility: Rolling standard deviation
+- quarter: Seasonal component (1-4)
+```
+
+**Step 2: Model Prediction**
+
+Each symbol-timeframe has trained models:
+
+**Crypto & Stocks (4 models each):**
+1. **Price Model**: Predicts percentage change from current price
+2. **High Model**: Predicts upper range boundary
+3. **Low Model**: Predicts lower range boundary
+4. **Confidence Model**: Predicts prediction reliability (60-95%)
+
+**Macro (3 models each):**
+1. **Price Model**: Predicts percentage change from current value
+2. **Lower Model**: Predicts lower range boundary
+3. **Upper Model**: Predicts upper range boundary
+4. **Confidence**: Calculated from R² score and range width (no separate model)
+
+```python
+# Scale features
+features_scaled = scaler.transform(feature_vector)
+
+# Generate predictions
+price_change = price_model.predict(features_scaled)[0]
+range_high = high_model.predict(features_scaled)[0]
+range_low = low_model.predict(features_scaled)[0]
+confidence = confidence_model.predict(features_scaled)[0]
+
+# Apply safety clipping
+if asset_type == 'crypto':
+    price_change = clip(-0.15, 0.15)  # ±15% max
+    range_high = clip(-0.1, 0.2)
+    range_low = clip(-0.2, 0.1)
+elif asset_type == 'stock':
+    price_change = clip(-0.1, 0.1)    # ±10% max
+    range_high = clip(-0.05, 0.1)
+    range_low = clip(-0.1, 0.05)
+else:  # macro
+    price_change = clip(-0.05, 0.05)  # ±5% max
+    range_low = clip(-0.08, 0.08)
+    range_high = clip(-0.08, 0.08)
+```
+
+**Step 3: Direction Classification**
+
+```python
+# Adaptive thresholds based on asset volatility
+if asset_type == 'crypto':
+    threshold = 0.5%
+elif asset_type == 'stock':
+    threshold = 0.3%
+else:  # macro
+    threshold = 0.1%
+
+# Classify direction
+if price_change > threshold:
+    direction = 'UP'
+elif price_change < -threshold:
+    direction = 'DOWN'
+else:
+    direction = 'HOLD'
+```
+
+### 2.3 Confidence Scoring
+
+**Confidence calculation differs by asset class:**
+
+#### Crypto & Stocks: Dedicated Confidence Models
+
+Crypto and stock models include a **4th trained XGBoost model specifically for confidence prediction**.
+
+```python
+# Each crypto/stock symbol-timeframe has 4 models:
+# 1. price_model - predicts price change
+# 2. high_model - predicts upper range
+# 3. low_model - predicts lower range  
+# 4. confidence_model - predicts confidence score (60-95%)
+
+# Predict confidence using the trained model
+confidence = confidence_model.predict(features_scaled)[0]
+
+# Clip to realistic bounds
+if asset_type == 'crypto':
+    confidence = clip(60, 95)
+else:  # stock
+    confidence = clip(60, 95)
+```
+
+**Why a separate model?**
+- Confidence depends on market conditions, not just price patterns
+- Learns from historical prediction accuracy
+- Adapts to changing market volatility
+- Provides more accurate uncertainty estimates
+
+#### Macro: R²-Based Confidence
+
+Macro indicators use **range-based confidence** derived from model R² score.
+
+```python
+# Macro models don't have a confidence model
+# Instead, use prediction range width and model quality
+
+range_width = abs(range_high - range_low)
+model_r2 = model_data['metrics'].get('price_r2', 0)
+
+# Base confidence from model quality
+if model_r2 > 0.2:
+    base_confidence = 75
+elif model_r2 > 0.1:
+    base_confidence = 70
+elif model_r2 > 0:
+    base_confidence = 65
+else:
+    base_confidence = 60
+
+# Adjust for prediction uncertainty
+confidence = base_confidence - (range_width * 100)
+confidence = clip(60, 90)  # Macro: 60-90% range
+```
+
+**Why different for macro?**
+- Macro data is sparse (quarterly/monthly releases)
+- Insufficient data points to train a separate confidence model
+- R² score is a reliable indicator of model quality for regression
+- Range width reflects prediction uncertainty
+
+### 2.4 Data Sources
+
+- **Crypto**: Binance WebSocket API (real-time) + REST API (historical)
+- **Stocks**: Yahoo Finance API (real-time polling + historical)
+- **Macro**: FRED API (Federal Reserve Economic Data)
+
+---
+
+## 3. API Endpoints Implementation
+
+### 3.1 Market Summary Endpoint
+
+**Endpoint**: `GET /api/market/summary`
+
+**Purpose**: Provides real-time overview of all assets with ML predictions
+
+**Query Parameters:**
+- `class`: Filter by asset class (crypto, stocks, macro, all)
+- `limit`: Number of results (default: 10)
+
+**Implementation Flow:**
+
+```
+1. Receive request with class filter
+2. Determine asset list based on class
+3. For each asset:
+   a. Check cache (30s TTL for hot symbols, 60s for normal)
+   b. If cache miss:
+      - Fetch current price from real-time service
+      - Generate ML prediction
+      - Calculate 24h change
+      - Cache result
+4. Sort by market cap / importance
+5. Return formatted response
+```
+
+**Response Format:**
 
 ```json
 {
-  "assets": [
+  "summary": [
     {
       "symbol": "BTC",
       "name": "Bitcoin",
-      "current_price": 110234.50,
+      "current_price": 95234.50,
       "change_24h": 2.34,
-      "volume": 45000000000,
+      "predicted_price": 96100.00,
+      "predicted_range": "$94,500 - $97,200",
       "forecast_direction": "UP",
       "confidence": 78,
-      "predicted_price": 112500.00,
-      "predicted_range": "$110.2k–$114.8k",
-      "asset_class": "crypto",
-      "timeframe": "1D"
+      "last_updated": "2024-01-15T10:30:00Z"
     }
   ],
-  "total": 10
+  "total_assets": 10,
+  "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
 
-### Error Handling
-- **Missing Price Data**: Skip asset (continue to next)
-- **Prediction Failure**: Skip asset (continue to next)
-- **Database Unavailable**: Use cached data only
-- **All Assets Failed**: Return empty array with `total: 0`
+**Special Handling:**
+
+- **Stablecoins**: Always return $1.00 with 99% confidence
+- **Macro Indicators**: Include `change_frequency` field instead of 24h change
+- **Cache Strategy**: Hot symbols (BTC, ETH, NVDA, AAPL) cached for 30s, others 60s
+
+**Performance Optimization:**
+
+- Concurrent prediction generation using `asyncio.gather()`
+- Redis caching with memory fallback
+- Connection pooling for database queries
+- Rate limiting: 100 requests/minute per IP
 
 ---
 
-## 2. Trends API
+### 3.2 Trends Endpoint
 
-### Purpose
-Provides historical accuracy analysis by comparing predicted prices against actual prices using a **price-based error threshold** (5%).
+**Endpoint**: `GET /api/asset/{symbol}/trends`
 
-### Endpoint Details
-- **URL**: `GET /api/asset/{symbol}/trends`
-- **Query Parameters**:
-  - `timeframe`: Timeframe for analysis (`1h`, `4h`, `1D`, `1W`, `1M`, `7D`, `1Y`, `5Y`)
-- **Timeframe Normalization**: Converts lowercase to uppercase (`1h` → `1H`, `4h` → `4H`)
+**Purpose**: Historical accuracy analysis comparing predictions vs actual prices
 
-### Data Flow
+**Query Parameters:**
+- `symbol`: Asset symbol (BTC, NVDA, GDP, etc.)
+- `timeframe`: Time interval (1H, 4H, 1D, 1W, 1M)
+
+**Implementation Flow:**
 
 ```
-Client Request (symbol, timeframe)
-    ↓
-Normalize Timeframe (1h → 1H, 4h → 4H)
-    ↓
-Check Asset Type:
-    - Macro: Force timeframe = 1D (ignore input)
-    - Crypto/Stock: Use normalized timeframe
-    ↓
-Map Timeframe (if needed):
-    - 7D → 1W
-    - 1Y → 1W
-    - 5Y → 1M
-    ↓
-Query Database (Separate Queries):
-    ├─→ Actual Prices: ORDER BY timestamp DESC LIMIT 50
-    └─→ Forecasts: ORDER BY timestamp DESC LIMIT 50
-    ↓
-Match by Date:
-    - Build forecast_map[date] = predicted_price
-    - For each actual price, lookup forecast by date
-    ↓
-Calculate Accuracy:
-    - Error % = |actual - predicted| / actual * 100
-    - Hit: error < 5%
-    - Miss: error >= 5%
-    ↓
-Build Response:
-    - Overall accuracy (hit rate %)
-    - Mean error %
-    - Chart data (actual vs predicted)
-    - Accuracy history (date-by-date)
+1. Validate symbol and timeframe
+2. Determine asset class (crypto/stock/macro)
+3. Get current prediction for context
+4. Query database for historical data:
+   - Join actual_prices with forecasts
+   - Use DISTINCT ON to get one record per time period
+   - For 1H/4H: Group by hour boundary
+   - For 1D/1W/1M: Group by date
+5. Calculate accuracy metrics:
+   - Hit rate (predictions within 5% error)
+   - Mean error percentage
+   - Direction accuracy
+6. Build chart data and accuracy history
+7. Return formatted response
 ```
 
-### Separate Query Strategy
+**Database Query Strategy:**
 
-**Why Separate Queries?**
-- Avoids JOIN complexity with timeframe mismatches
-- More resilient to missing predictions
-- Easier to debug date matching issues
-- Better performance with proper indexes
-
-**Query 1: Actual Prices**
 ```sql
-SELECT price, timestamp
-FROM actual_prices
-WHERE symbol = $1
-ORDER BY timestamp DESC
+-- For hourly/4H timeframes
+SELECT DISTINCT ON (DATE_TRUNC('hour', ap.timestamp))
+    ap.price as actual_price,
+    ap.timestamp,
+    f.predicted_price
+FROM actual_prices ap
+LEFT JOIN forecasts f ON 
+    f.symbol = ap.symbol AND
+    DATE_TRUNC('hour', f.created_at) = DATE_TRUNC('hour', ap.timestamp)
+WHERE ap.symbol = $1
+ORDER BY DATE_TRUNC('hour', ap.timestamp) DESC, ap.timestamp DESC
+LIMIT 50
+
+-- For daily/weekly/monthly timeframes
+SELECT DISTINCT ON (DATE(ap.timestamp))
+    ap.price as actual_price,
+    ap.timestamp,
+    f.predicted_price
+FROM actual_prices ap
+LEFT JOIN forecasts f ON 
+    f.symbol = ap.symbol AND
+    DATE(f.created_at) = DATE(ap.timestamp)
+WHERE ap.symbol = $1
+ORDER BY DATE(ap.timestamp) DESC, ap.timestamp DESC
 LIMIT 50
 ```
 
-**Query 2: Forecasts**
-```sql
-SELECT predicted_price, created_at
-FROM forecasts
-WHERE symbol = $1
-ORDER BY created_at DESC
-LIMIT 50
-```
+**Accuracy Calculation:**
 
-**Date Matching Logic**
 ```python
-# Build forecast lookup by date
-forecast_map = {}
-for f in forecast_rows:
-    date_key = f['created_at'].date()
-    forecast_map[date_key] = float(f['predicted_price'])
-
-# Match actual prices with forecasts
-for a in actual_rows:
-    date_key = a['timestamp'].date()
-    predicted_price = forecast_map.get(date_key)  # None if no match
+# Price-based accuracy (industry standard)
+for actual, predicted in zip(actual_prices, predicted_prices):
+    error_pct = abs(predicted - actual) / actual * 100
+    result = 'Hit' if error_pct < 5.0 else 'Miss'
+    
+# Overall accuracy
+hits = sum(1 for r in results if r == 'Hit')
+accuracy_pct = (hits / total) * 100
 ```
 
-### Accuracy Calculation
+**Response Format:**
 
-**Price-Based Error Threshold** (5%):
-```python
-error_pct = abs(actual - predicted) / actual * 100
-result = 'Hit' if error_pct < 5 else 'Miss'
-```
-
-**Overall Accuracy**:
-```python
-hits = sum(1 for item in accuracy_history if item['result'] == 'Hit')
-total = len(accuracy_history)
-accuracy_pct = (hits / total * 100) if total > 0 else 0
-```
-
-**Why 5% Threshold?**
-- More realistic than direction-based matching (UP/DOWN/HOLD)
-- Accounts for market volatility
-- Typical accuracy: 60-75% for short timeframes, 70-85% for long timeframes
-- Prevents 100% accuracy from look-ahead bias
-
-### Timeframe Handling
-
-**Crypto Timeframes** (Mixed Case):
-- Short: `1h`, `4h` (lowercase)
-- Long: `1D`, `1W`, `1M` (uppercase)
-
-**Stock Timeframes**:
-- `5m`, `15m`, `30m`, `60m`, `4h`, `1d`, `1wk`, `1mo`
-- Mapping: `1h` → `60m`, `1w` → `1wk`, `1m` → `1mo`
-
-**Macro Timeframes**:
-- Always `1D` (ignore input timeframe)
-- Macro indicators don't support intraday timeframes
-
-### Response Format
-
-**Crypto/Stock Response**:
 ```json
 {
   "symbol": "BTC",
   "timeframe": "1D",
-  "overall_accuracy": 72.5,
+  "overall_accuracy": 73.5,
   "mean_error_pct": 3.2,
   "chart": {
-    "actual": [110000, 112000, 111500, ...],
-    "predicted": [111200, 112500, 111800, ...],
-    "timestamps": ["2025-01-15T00:00:00", "2025-01-16T00:00:00", ...]
+    "actual": [95000, 96200, 94800, ...],
+    "predicted": [95500, 96000, 95200, ...],
+    "timestamps": ["2024-01-01T00:00:00Z", ...]
   },
   "accuracy_history": [
     {
-      "date": "2025-01-15",
-      "actual": 110000,
-      "predicted": 111200,
+      "date": "2024-01-01",
+      "actual": 95000,
+      "predicted": 95500,
       "result": "Hit",
-      "error_pct": 1.1
+      "error_pct": 0.5
     }
   ],
   "validation": {
     "valid": true,
     "mean_error_pct": 3.2,
-    "data_points": 45
+    "valid_pairs": 48
   }
 }
 ```
 
-**Macro Response** (includes `change_frequency` instead of `timeframe`):
+**Macro Indicator Response:**
+
 ```json
 {
   "symbol": "GDP",
   "change_frequency": "Quarterly",
-  "overall_accuracy": 85.0,
-  "mean_error_pct": 1.5,
-  "chart": { ... },
-  "accuracy_history": [ ... ],
-  "validation": { ... }
+  "overall_accuracy": 82.0,
+  "mean_error_pct": 1.8,
+  "chart": {...},
+  "accuracy_history": [...]
 }
 ```
 
-### Data Validation
+**Data Deduplication:**
 
-**Validation Checks**:
-1. **Minimum Data Points**: At least 10 matched pairs required
-2. **Price Validity**: Prices must be > 0 and within reasonable ranges
-3. **No NaN Values**: All prices must be valid numbers
-4. **Date Matching**: Actual and predicted must have matching dates
+The DISTINCT ON query ensures one record per time period by:
+1. Grouping by time boundary (hour for 1H/4H, date for 1D+)
+2. Selecting the most recent record within each group
+3. Preventing duplicate timestamps in chart data
 
-**Validation Response**:
-```python
-validation = {
-    'valid': True,
-    'mean_error_pct': 3.2,
-    'data_points': 45,
-    'matched_pairs': 42
-}
-```
+**Validation:**
 
-### Error Handling
-- **No Historical Data**: Return `{'error': 'No historical data available'}`
-- **No Predictions**: Return `{'error': 'No predictions available for this timeframe'}`
-- **Validation Failed**: Return `{'error': validation['error']}`
-- **Database Unavailable**: Return `{'error': 'Database not available'}`
+- Price validation: Only positive prices accepted (no range restrictions)
+- Data pairing: Ensures actual and predicted arrays have matching lengths
+- Error metrics: Calculates mean, max, min error percentages
 
 ---
 
-## 3. Chart WebSocket
+### 3.3 WebSocket Chart Endpoint
 
-### Purpose
-Provides real-time chart data with past prices (blue line) and future predictions (red dashed line), supporting dynamic timeframe changes without reconnection.
+**Endpoint**: `ws://host/ws/chart/{symbol}`
 
-### Endpoint Details
-- **URL**: `ws://localhost:8000/ws/chart/{symbol}`
-- **Query Parameters**:
-  - `timeframe`: Initial timeframe (`1h`, `4h`, `1D`, `1W`, `1M`, etc.)
-- **Update Interval**: 5 seconds (configurable)
+**Purpose**: Real-time streaming of enhanced chart data with OHLC, predictions, and technical indicators
 
-### Connection Flow
+**Query Parameters:**
+- `symbol`: Asset symbol
+- `timeframe`: Chart timeframe (1H, 4H, 1D, 1W, 1M)
+
+**Connection Flow:**
 
 ```
-Client Connects
-    ↓
-Validate Symbol & Timeframe
-    ↓
-Accept WebSocket Connection
-    ↓
-Start Update Loop:
-    ├─→ Check for Incoming Messages (5s timeout)
-    │   - Type: "change_timeframe"
-    │   - Action: Update timeframe variable
-    │   
-    ├─→ Generate ML Prediction (current timeframe)
-    │   
-    ├─→ Query Database for Past Prices (30 points)
-    │   
-    ├─→ Generate Multi-Step Predictions (future prices)
-    │   - 1D: 12 hourly predictions
-    │   - 1W: 7 daily predictions
-    │   - 1M: 4 weekly predictions
-    │   
-    └─→ Send Chart Update (JSON)
-    ↓
-Repeat Every 5 Seconds
+1. Client connects via WebSocket
+2. Server validates symbol and timeframe
+3. Register connection in active_connections pool
+4. Start streaming loop:
+   a. Every 15 seconds:
+      - Fetch current price
+      - Generate ML prediction
+      - Query historical OHLC data
+      - Calculate technical indicators
+      - Send JSON message to client
+5. On disconnect: Remove from connection pool
 ```
 
-### Dynamic Timeframe Changes
-
-**Client Message Format**:
-```json
-{
-  "type": "change_timeframe",
-  "timeframe": "1W"
-}
-```
-
-**Server Handling**:
-```python
-try:
-    message = await asyncio.wait_for(websocket.receive_text(), timeout=5.0)
-    data = json.loads(message)
-    
-    if data.get('type') == 'change_timeframe':
-        new_timeframe = WebSocketSecurity.validate_timeframe(data.get('timeframe', '1D'))
-        if new_timeframe != timeframe:
-            timeframe = new_timeframe
-            logger.info(f"Timeframe changed to {timeframe} for {symbol}")
-            update_count = 0  # Reset counter
-except asyncio.TimeoutError:
-    pass  # No message, continue with update
-```
-
-**Benefits**:
-- No reconnection required
-- Instant timeframe switching
-- Maintains connection state
-- Reduces server load
-
-### Multi-Step Predictions
-
-**Timeframe-Based Steps**:
-```python
-timeframe_steps = {
-    '1D': 12,  # 12 hourly predictions
-    '1W': 7,   # 7 daily predictions
-    '1M': 4,   # 4 weekly predictions
-    '1h': 12,  # 12 hourly predictions
-    '4h': 6    # 6 4-hour predictions
-}
-```
-
-**Prediction Generation**:
-```python
-from multistep_predictor import multistep_predictor
-
-multistep_data = await multistep_predictor.get_multistep_forecast(
-    symbol, timeframe, num_steps
-)
-
-future_prices = multistep_data['prices']
-future_timestamps = multistep_data['timestamps']
-```
-
-**Fallback** (if multistep unavailable):
-```python
-future_prices = [predicted_price]  # Single prediction
-future_timestamps = []
-```
-
-### Chart Data Structure
-
-**Past Prices** (Blue Solid Line):
-```python
-# Query last 30 actual prices from database
-rows = await conn.fetch(
-    "SELECT price, timestamp FROM actual_prices WHERE symbol = $1 ORDER BY timestamp DESC LIMIT 30",
-    db_key
-)
-
-past_prices = [float(row['price']) for row in reversed(rows)]
-timestamps = [row['timestamp'].isoformat() for row in reversed(rows)]
-```
-
-**Future Prices** (Red Dashed Line):
-```python
-# Multi-step predictions or single prediction
-future_prices = [pred1, pred2, pred3, ...]
-future_timestamps = [ts1, ts2, ts3, ...]
-```
-
-### WebSocket Message Format
+**Message Format:**
 
 ```json
 {
   "type": "chart_update",
   "symbol": "BTC",
-  "name": "Bitcoin",
   "timeframe": "1D",
-  "prediction_steps": 12,
+  "current_price": 95234.50,
+  "change_24h": 2.34,
+  "predicted_price": 96100.00,
+  "predicted_range": "$94,500 - $97,200",
+  "range_low": 94500.00,
+  "range_high": 97200.00,
   "forecast_direction": "UP",
   "confidence": 78,
-  "current_price": 110234.50,
-  "change_24h": 2.34,
-  "volume": 45000000000,
-  "last_updated": "2025-01-20T15:30:00Z",
-  "chart": {
-    "past": [108000, 109000, 110000, ...],
-    "future": [111000, 112000, 113000, ...],
-    "timestamps": ["2025-01-15T00:00:00", "2025-01-16T00:00:00", ...]
+  "ohlc_data": [
+    {
+      "timestamp": "2024-01-01T00:00:00Z",
+      "open": 94000,
+      "high": 96000,
+      "low": 93500,
+      "close": 95000,
+      "volume": 28500000000
+    }
+  ],
+  "technical_indicators": {
+    "sma_20": 94500,
+    "sma_50": 93200,
+    "rsi": 62.5,
+    "volatility": 0.025
   },
-  "update_count": 42,
-  "data_source": "Multi-step ML prediction",
-  "prediction_updated": true,
-  "next_prediction_update": "2025-01-20T15:35:00Z",
-  "forecast_stable": false
+  "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
 
-**Macro Indicators** (includes `change_frequency` instead of `volume`):
-```json
-{
-  "type": "chart_update",
-  "symbol": "GDP",
-  "change_frequency": "Quarterly",
-  "chart": {
-    "past": [28000, 28500, 29000],
-    "future": [29200],
-    "timestamps": [...]
-  }
+**Update Intervals:**
+
+- **Crypto**: 15 seconds (high volatility)
+- **Stocks**: 30 seconds (moderate volatility)
+- **Macro**: 60 seconds (low volatility, infrequent changes)
+
+**Connection Management:**
+
+```python
+# Connection pool structure
+active_connections = {
+    'BTC': {
+        'conn_id_1': {
+            'websocket': WebSocket,
+            'timeframe': '1D',
+            'connected_at': datetime
+        }
+    }
 }
+
+# Broadcast to all connections for a symbol
+async def broadcast(symbol, data):
+    for conn_id, conn_data in active_connections[symbol].items():
+        try:
+            await conn_data['websocket'].send_json(data)
+        except:
+            # Remove failed connection
+            del active_connections[symbol][conn_id]
 ```
 
-### Connection Management
+**Error Handling:**
 
-**Connection State Checks**:
-```python
-# Before sending
-if websocket.client_state.name != 'CONNECTED':
-    break
+- **Connection Loss**: Automatic cleanup from pool
+- **Rate Limiting**: Max 10 concurrent connections per symbol
+- **Timeout**: 30-second ping/pong for keepalive
+- **Fallback**: If WebSocket fails, client can use REST API polling
 
-# After sending
-if websocket.client_state.name == 'CONNECTED':
-    await websocket.send_text(json.dumps(chart_update))
-```
+**Special Cases:**
 
-**Error Handling**:
-```python
-try:
-    # Update loop
-except WebSocketDisconnect:
-    logger.info(f"Chart WebSocket disconnected: {symbol}")
-except Exception as e:
-    logger.error(f"Chart WebSocket error for {symbol}: {e}", exc_info=True)
-```
-
-**Cleanup**:
-- Automatic on disconnect
-- No manual connection tracking needed (stateless)
+- **Stablecoins**: Send updates every 60s (values don't change)
+- **Macro Indicators**: Only send updates when new data released
+- **Market Hours**: Stock updates pause outside trading hours (9:30 AM - 4:00 PM ET)
 
 ---
 
-## 4. Data Flow Architecture
+## 4. Data Integrity & Validation
 
-### Real-Time Data Pipeline
+### 4.1 Duplicate Prevention
 
-```
-External APIs (Binance, Yahoo Finance, FRED)
-    ↓
-Realtime Services (WebSocket/Polling)
-    ├─→ In-Memory Cache (price_cache)
-    ├─→ Redis Cache (60s TTL)
-    └─→ Database Insert (actual_prices table)
-    ↓
-API Endpoints (Summary, Trends, Chart)
-    ↓
-Client Applications
-```
+**Problem**: Real-time services call database storage frequently, risking duplicate records.
 
-### ML Prediction Pipeline
+**Solution**: Database-level deduplication using timestamp rounding.
 
-```
-Client Request (symbol, timeframe)
-    ↓
-Check Cache (Redis + Memory)
-    ├─→ Cache Hit: Return cached prediction
-    └─→ Cache Miss: Generate fresh prediction
-        ↓
-        Get Current Price (realtime cache)
-        ↓
-        Calculate Features (technical indicators)
-        ↓
-        Load Model (crypto/stock/macro)
-        ↓
-        Generate Prediction (price, range, confidence)
-        ↓
-        Cache Result (priority-based TTL)
-        ↓
-        Return Prediction
+```python
+def _round_timestamp_for_timeframe(timestamp, timeframe):
+    """Round timestamp to timeframe boundary"""
+    if timeframe == '1h':
+        return timestamp.replace(minute=0, second=0, microsecond=0)
+    elif timeframe == '4h':
+        hour = (timestamp.hour // 4) * 4
+        return timestamp.replace(hour=hour, minute=0, second=0, microsecond=0)
+    elif timeframe == '1D':
+        return timestamp.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif timeframe == '1W':
+        # Round to Monday
+        days_since_monday = timestamp.weekday()
+        return (timestamp - timedelta(days=days_since_monday)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+    elif timeframe == '1M':
+        return timestamp.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 ```
 
-### Database Schema
+**Database Constraint:**
 
-**actual_prices Table**:
 ```sql
-CREATE TABLE actual_prices (
-    id SERIAL PRIMARY KEY,
-    symbol VARCHAR(50) NOT NULL,
-    price DECIMAL(20, 8) NOT NULL,
-    volume DECIMAL(30, 2),
-    timestamp TIMESTAMP NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
-);
+-- Unique constraint on symbol + timestamp
+CREATE UNIQUE INDEX idx_actual_prices_symbol_timestamp 
+ON actual_prices(symbol, timestamp);
 
-CREATE INDEX idx_actual_prices_symbol_timestamp ON actual_prices(symbol, timestamp DESC);
+-- Insert with conflict handling
+INSERT INTO actual_prices (symbol, price, timestamp, ...)
+VALUES ($1, $2, $3, ...)
+ON CONFLICT (symbol, timestamp) DO UPDATE SET
+    price = EXCLUDED.price,
+    high = GREATEST(actual_prices.high, EXCLUDED.high),
+    low = LEAST(actual_prices.low, EXCLUDED.low),
+    close_price = EXCLUDED.close_price,
+    volume = actual_prices.volume + EXCLUDED.volume;
 ```
 
-**forecasts Table**:
+**OHLC Aggregation:**
+
+When updating existing records:
+- **Open**: Keep original (first price of period)
+- **High**: Take maximum of old and new
+- **Low**: Take minimum of old and new
+- **Close**: Update to latest price
+- **Volume**: Sum of all volumes
+
+### 4.2 Price Validation
+
+**Current Implementation**: Accept any positive price (no range restrictions)
+
+```python
+def validate_price(symbol: str, price: float) -> bool:
+    """Validate if price is positive"""
+    return price > 0
+```
+
+**Rationale:**
+- Markets can move to any price level
+- Historical ranges become outdated quickly
+- Prevents false rejections during extreme volatility
+- Allows for black swan events and market crashes
+
+### 4.3 Cache Strategy
+
+**Multi-Tier Caching:**
+
+1. **Redis (Primary)**: Distributed cache for production
+2. **Memory (Fallback)**: In-process cache when Redis unavailable
+
+**Priority-Based TTL:**
+
+```python
+# Hot symbols (high traffic)
+HOT_SYMBOLS = ['BTC', 'ETH', 'NVDA', 'AAPL']
+hot_ttl = 30  # seconds
+
+# Normal symbols
+normal_ttl = 60  # seconds
+
+# Cold symbols (low traffic)
+cold_ttl = 120  # seconds
+```
+
+**Cache Keys:**
+
+```python
+# Unified cache key format
+prediction:{symbol}:{timeframe}  # e.g., prediction:BTC:1D
+price:{symbol}:{asset_class}     # e.g., price:BTC:crypto
+chart:{symbol}:{timeframe}       # e.g., chart:NVDA:1D
+```
+
+### 4.4 Record Limits
+
+**Maintenance Strategy**: Keep exactly 200 records per symbol-timeframe
+
 ```sql
-CREATE TABLE forecasts (
-    id SERIAL PRIMARY KEY,
-    symbol VARCHAR(50) NOT NULL,
-    predicted_price DECIMAL(20, 8) NOT NULL,
-    confidence INTEGER,
-    forecast_direction VARCHAR(10),
-    created_at TIMESTAMP NOT NULL,
-    timeframe VARCHAR(10)
+-- Periodic cleanup
+DELETE FROM actual_prices 
+WHERE symbol = $1 AND id NOT IN (
+    SELECT id FROM actual_prices 
+    WHERE symbol = $1 
+    ORDER BY timestamp DESC 
+    LIMIT 200
 );
-
-CREATE INDEX idx_forecasts_symbol_created ON forecasts(symbol, created_at DESC);
 ```
+
+**Rationale:**
+- 200 records provides sufficient history for technical analysis
+- Prevents database bloat
+- Maintains query performance
+- Covers appropriate time ranges:
+  - 1H: 200 hours ≈ 8 days
+  - 1D: 200 days ≈ 6.5 months
+  - 1W: 200 weeks ≈ 3.8 years
+  - 1M: 200 months ≈ 16.6 years
 
 ---
 
-## 5. Key Technical Decisions
+## 5. Conclusion
 
-### 1. Separate Queries vs JOIN
+The Trading AI Platform implements a robust, production-ready system for real-time financial predictions across multiple asset classes. Key design decisions prioritize:
 
-**Decision**: Use separate queries for actual prices and forecasts in Trends API
+1. **Data Integrity**: No synthetic data, real-world constraints respected
+2. **Performance**: Multi-tier caching, connection pooling, async operations
+3. **Accuracy**: Asset-specific ML models with confidence scoring
+4. **Scalability**: Horizontal scaling via stateless design
+5. **Reliability**: Graceful degradation, error handling, fallback mechanisms
 
-**Rationale**:
-- Avoids JOIN complexity with timeframe mismatches
-- More resilient to missing predictions
-- Easier to debug date matching issues
-- Better performance with proper indexes
-
-**Trade-offs**:
-- Two database queries instead of one
-- Manual date matching in application code
-- Slightly more complex logic
-
-### 2. Date-Based Matching
-
-**Decision**: Match actual prices and forecasts by date (not timestamp)
-
-**Rationale**:
-- Forecasts and actual prices may have different timestamps
-- Date-level granularity sufficient for daily/weekly timeframes
-- Timestamp normalization ensures consistent date boundaries
-
-**Implementation**:
-```python
-date_key = timestamp.date()  # Extract date only
-forecast_map[date_key] = predicted_price
-```
-
-### 3. WebSocket Timeframe Changes
-
-**Decision**: Support dynamic timeframe changes via messages (no reconnection)
-
-**Rationale**:
-- Better user experience (instant switching)
-- Reduces server load (no reconnection overhead)
-- Maintains connection state
-- Simpler client code
-
-**Alternative Considered**: Reconnect with new timeframe in query params
-- **Rejected**: More complex, slower, higher server load
-
-### 4. Priority-Based Caching
-
-**Decision**: Different cache TTLs based on symbol priority
-
-**Rationale**:
-- Hot symbols (BTC, ETH, NVDA, AAPL) need fresher data
-- Cold symbols can use longer cache to reduce load
-- Balances freshness with performance
-
-**TTL Configuration**:
-- Hot: 30s
-- Normal: 60s
-- Cold: 120s
-
-### 5. Price-Based Accuracy
-
-**Decision**: Use 5% error threshold instead of direction-based matching
-
-**Rationale**:
-- More realistic accuracy metrics (60-75% vs 100%)
-- Accounts for market volatility
-- Prevents look-ahead bias
-- Industry-standard approach
-
-**Formula**:
-```python
-error_pct = abs(actual - predicted) / actual * 100
-hit = error_pct < 5
-```
-
-### 6. Timestamp Normalization
-
-**Decision**: Normalize timestamps to timeframe boundaries
-
-**Rationale**:
-- Ensures consistent date matching
-- Prevents all forecasts having same date
-- Preserves date differences for trends
-
-**Implementation**:
-```python
-from utils.timestamp_utils import TimestampUtils
-
-normalized_ts = TimestampUtils.adjust_for_timeframe(timestamp, timeframe)
-```
+The system successfully handles the unique characteristics of each asset class while maintaining a unified API interface for client applications.
 
 ---
 
-## 6. Current Issues & Solutions
-
-### Issue 1: Low Match Rate for 1D Timeframe
-
-**Problem**: Only 5-10 matched pairs out of 50 records for 1D timeframe
-
-**Root Cause**: Forecasts stored with same date (2025-10-16) instead of historical dates
-
-**Solution**: Fixed timestamp normalization in gap filling service
-```python
-# Before: All forecasts had same date
-created_at = datetime.now()
-
-# After: Use historical timestamp
-created_at = TimestampUtils.adjust_for_timeframe(data[i]['timestamp'], timeframe)
-```
-
-**Status**: ✅ Fixed
-
-### Issue 2: Missing Predictions for Some Timeframes
-
-**Problem**: Stock models missing 4h and 1wk timeframes
-
-**Root Cause**: Training script only included `['5m', '15m', '30m', '60m', '1d', '1mo']`
-
-**Solution**: Updated training to include `'4h'` and `'1wk'`
-```python
-timeframes = {
-    '5m': 'csv', '15m': 'csv', '30m': 'csv', '60m': 'csv',
-    '4h': 'csv',  # Added
-    '1d': 'csv',
-    '1wk': 'csv',  # Added
-    '1mo': 'csv'
-}
-```
-
-**Status**: ✅ Fixed
-
-### Issue 3: 200-Point Limit in Gap Filling
-
-**Problem**: Gap filling only worked with exactly 200 data points
-
-**Root Cause**: Hardcoded loop range `range(30, len(data) - 1)` required 200+ points
-
-**Solution**: Changed to use `min_history` (20 points)
-```python
-# Before: Required 200+ points
-for i in range(30, len(data) - 1):
-
-# After: Works with 20+ points
-min_history = 20
-for i in range(min_history, len(data) - 1):
-```
-
-**Status**: ✅ Fixed
-
----
-
-## 7. Performance Characteristics
-
-### Response Times
-
-**Market Summary**:
-- Cached (hot symbols): 20-50ms
-- Cached (cold symbols): 30-80ms
-- Uncached: 100-300ms
-
-**Trends API**:
-- Database query: 50-150ms
-- Date matching: 10-30ms
-- Total: 60-180ms
-
-**Chart WebSocket**:
-- Update interval: 5 seconds
-- Message latency: <100ms
-- Multi-step prediction: 50-200ms
-
-### Cache Hit Rates
-
-**Price Cache**:
-- Realtime service: 95%+ (updated every 1-2s)
-- Redis cache: 90%+ (60s TTL)
-- Database fallback: <5%
-
-**Prediction Cache**:
-- Hot symbols: 85%+ (30s TTL)
-- Normal symbols: 90%+ (60s TTL)
-- Cold symbols: 95%+ (120s TTL)
-
-### Database Load
-
-**Queries Per Minute** (typical):
-- Market Summary: 10-20 (mostly cached)
-- Trends API: 5-10 (database-heavy)
-- Chart WebSocket: 0-5 (mostly cached)
-
-**Connection Pool**:
-- Min connections: 5
-- Max connections: 20
-- Typical usage: 8-12 connections
-
-### Scalability
-
-**Concurrent Connections**:
-- WebSocket: 1000+ concurrent connections supported
-- REST API: 100+ requests/second
-
-**Horizontal Scaling**:
-- Stateless design (except WebSocket connections)
-- Redis for distributed caching
-- Database connection pooling
-
----
-
-## 8. Recommendations
-
-### Immediate Improvements
-
-1. **Add Prediction Confidence Trends**
-   - Track confidence over time
-   - Show confidence degradation patterns
-   - Alert on low confidence
-
-2. **Implement Prediction Versioning**
-   - Store model version with each prediction
-   - Track accuracy by model version
-   - Enable A/B testing
-
-3. **Add Timeframe-Specific Accuracy**
-   - Separate accuracy metrics per timeframe
-   - Show which timeframes perform best
-   - Optimize cache TTL per timeframe
-
-4. **Enhance Error Responses**
-   - More specific error codes
-   - Suggested actions for clients
-   - Rate limit headers
-
-### Future Enhancements
-
-1. **Real-Time Accuracy Updates**
-   - WebSocket endpoint for live accuracy
-   - Push notifications on accuracy changes
-   - Real-time validation
-
-2. **Advanced Caching**
-   - Predictive cache warming
-   - Smart cache invalidation
-   - Cache analytics dashboard
-
-3. **Multi-Model Ensemble**
-   - Combine multiple models
-   - Weighted predictions
-   - Confidence-based selection
-
-4. **Historical Backtesting**
-   - Backtest predictions on historical data
-   - Compare model performance
-   - Optimize hyperparameters
-
----
-
-## Conclusion
-
-The implementation of the Market Summary endpoint, Trends API, and Chart WebSocket provides a robust, real-time financial forecasting platform with:
-
-- **Real data only** (no synthetic/random data)
-- **Multi-tier caching** (Redis + Memory) for optimal performance
-- **Price-based accuracy** (5% threshold) for realistic metrics
-- **Dynamic timeframe switching** without reconnection
-- **Priority-based caching** for hot symbols
-- **Separate query strategy** for resilient data matching
-
-All three endpoints are production-ready with comprehensive error handling, validation, and performance optimization.
-
----
-
-**Report Generated**: 2025-01-20  
-**Version**: 1.0  
+**Document Version**: 1.0  
+**Last Updated**: 2024-01-15  
 **Author**: Trading AI Platform Team

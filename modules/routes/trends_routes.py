@@ -170,8 +170,7 @@ def setup_trends_routes(app: FastAPI, model, database):
                     'predicted': valid_predicted,
                     'timestamps': valid_timestamps
                 },
-                'accuracy_history': accuracy_history,
-                'validation': validation
+                'accuracy_history': accuracy_history
             }
         else:
             response = {
@@ -184,8 +183,7 @@ def setup_trends_routes(app: FastAPI, model, database):
                     'predicted': valid_predicted,
                     'timestamps': valid_timestamps
                 },
-                'accuracy_history': accuracy_history,
-                'validation': validation
+                'accuracy_history': accuracy_history
             }
         
         return response
