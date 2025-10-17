@@ -9,98 +9,6 @@ def setup_trends_routes(app: FastAPI, model, database):
     
     @app.get("/api/asset/{symbol}/trends")
     async def asset_trends(symbol: str, timeframe: str = "1D"):
-        # Special handling for 'ALL' timeframe - combined accuracy
-        if timeframe.upper() == 'ALL':
-            return await get_combined_accuracy(symbol, database, model)
-    
-    async def get_combined_accuracy(symbol: str, database, model):
-        """Calculate combined accuracy across all timeframes"""
-        if not database or not database.pool:
-            return {'error': 'Database not available'}
-        
-        macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
-        is_macro = symbol in macro_symbols
-        
-        # Define timeframes to check
-        if is_macro:
-            timeframes = ['1D']
-        else:
-            timeframes = ['1H', '4H', '1D', '1W', '1M']
-        
-        all_actual = []
-        all_predicted = []
-        all_timestamps = []
-        timeframe_stats = []
-        
-        async with database.pool.acquire() as conn:
-            for tf in timeframes:
-                db_symbol = symbol_manager.get_db_key(symbol, tf)
-                
-                rows = await conn.fetch("""
-                    SELECT DISTINCT ON (DATE(ap.timestamp))
-                        ap.price as actual_price,
-                        ap.timestamp,
-                        f.predicted_price
-                    FROM actual_prices ap
-                    LEFT JOIN forecasts f ON 
-                        f.symbol = ap.symbol AND
-                        DATE(f.created_at) = DATE(ap.timestamp)
-                    WHERE ap.symbol = $1
-                    ORDER BY DATE(ap.timestamp) DESC, ap.timestamp DESC
-                    LIMIT 50
-                """, db_symbol)
-                
-                if not rows:
-                    continue
-                
-                tf_actual = []
-                tf_predicted = []
-                
-                for record in reversed(rows):
-                    price = float(record['actual_price'])
-                    if data_validator.validate_price(symbol, price) and record['predicted_price']:
-                        tf_actual.append(price)
-                        tf_predicted.append(float(record['predicted_price']))
-                
-                if tf_actual and tf_predicted:
-                    # Calculate accuracy for this timeframe
-                    hits = sum(1 for i in range(len(tf_actual)) 
-                              if abs(tf_actual[i] - tf_predicted[i]) / tf_actual[i] * 100 < 5)
-                    tf_accuracy = (hits / len(tf_actual)) * 100
-                    
-                    timeframe_stats.append({
-                        'timeframe': tf,
-                        'accuracy': round(tf_accuracy, 1),
-                        'total_predictions': len(tf_actual),
-                        'hits': hits
-                    })
-                    
-                    all_actual.extend(tf_actual)
-                    all_predicted.extend(tf_predicted)
-        
-        if not all_actual or not all_predicted:
-            return {'error': 'No predictions available'}
-        
-        # Calculate combined accuracy
-        validation = data_validator.validate_accuracy_data(all_actual, all_predicted, symbol, 'ALL')
-        
-        if not validation['valid']:
-            return {'error': validation.get('error', 'Validation failed')}
-        
-        total_hits = sum(1 for i in range(len(all_actual)) 
-                        if abs(all_actual[i] - all_predicted[i]) / all_actual[i] * 100 < 5)
-        combined_accuracy = (total_hits / len(all_actual)) * 100
-        
-        return {
-            'symbol': symbol,
-            'timeframe': 'ALL',
-            'combined_accuracy': round(combined_accuracy, 1),
-            'mean_error_pct': round(validation['mean_error_pct'], 1),
-            'total_predictions': len(all_actual),
-            'total_hits': total_hits,
-            'timeframe_breakdown': timeframe_stats
-        }
-        
         print(f"🔍 TRENDS API: symbol={symbol}, timeframe={timeframe}")
         
         if not database or not database.pool:
@@ -236,10 +144,38 @@ def setup_trends_routes(app: FastAPI, model, database):
             print(f"❌ Validation failed: {validation.get('error', 'Unknown error')}")
             return {'error': validation.get('error', 'Validation failed')}
         
-        # Calculate accuracy as Hit rate (predictions within 5% error)
-        hits = sum(1 for item in accuracy_history if item['result'] == 'Hit')
-        total = len(accuracy_history)
-        accuracy_pct = (hits / total * 100) if total > 0 else 0
+        # Calculate combined accuracy across all timeframes
+        all_timeframes = ['1D'] if is_macro else ['1H', '4H', '1D', '1W', '1M']
+        combined_hits = 0
+        combined_total = 0
+        
+        async with database.pool.acquire() as conn:
+            for tf in all_timeframes:
+                tf_db_symbol = symbol_manager.get_db_key(symbol, tf)
+                tf_rows = await conn.fetch("""
+                    SELECT ap.price as actual_price, f.predicted_price
+                    FROM actual_prices ap
+                    LEFT JOIN forecasts f ON f.symbol = ap.symbol AND DATE(f.created_at) = DATE(ap.timestamp)
+                    WHERE ap.symbol = $1 AND f.predicted_price IS NOT NULL
+                    LIMIT 50
+                """, tf_db_symbol)
+                
+                for row in tf_rows:
+                    actual = float(row['actual_price'])
+                    predicted = float(row['predicted_price'])
+                    error_pct = abs(actual - predicted) / actual * 100 if actual > 0 else 0
+                    if error_pct < 5:
+                        combined_hits += 1
+                    combined_total += 1
+        
+        # Use combined accuracy if available, otherwise use current timeframe
+        if combined_total > 0:
+            accuracy_pct = (combined_hits / combined_total * 100)
+        else:
+            hits = sum(1 for item in accuracy_history if item['result'] == 'Hit')
+            total = len(accuracy_history)
+            accuracy_pct = (hits / total * 100) if total > 0 else 0
+        
         mean_error = validation['mean_error_pct'] if validation['valid'] else 0
         
         print(f"📊 ACCURACY: hits={hits}, total={total}, accuracy={accuracy_pct:.1f}%, mean_error={mean_error:.1f}%")
