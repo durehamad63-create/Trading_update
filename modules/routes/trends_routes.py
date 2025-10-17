@@ -171,6 +171,8 @@ def setup_trends_routes(app: FastAPI, model, database):
         # Use combined accuracy if available, otherwise use current timeframe
         if combined_total > 0:
             accuracy_pct = (combined_hits / combined_total * 100)
+            hits = combined_hits
+            total = combined_total
         else:
             hits = sum(1 for item in accuracy_history if item['result'] == 'Hit')
             total = len(accuracy_history)
