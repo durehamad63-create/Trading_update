@@ -19,8 +19,8 @@ from typing import List, Dict, Any
 class GapFillingService:
     def __init__(self, model=None):
         self.model = model
-        # All 25 assets from configuration
-        self.crypto_symbols = list(CRYPTO_SYMBOLS.keys())  # 10 crypto
+        # All 25 assets from configuration (exclude stablecoins from data collection)
+        self.crypto_symbols = [s for s in CRYPTO_SYMBOLS.keys() if s not in ['USDT', 'USDC']]  # 8 crypto (no stablecoins)
         self.stock_symbols = list(STOCK_SYMBOLS.keys())    # 10 stocks  
         self.macro_symbols = list(MACRO_SYMBOLS.keys())    # 5 macro
         self.all_symbols = self.crypto_symbols + self.stock_symbols + self.macro_symbols

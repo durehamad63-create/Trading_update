@@ -217,7 +217,24 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 past_prices = []
                 timestamps = []
                 
-                if database and database.pool:
+                # Check if stablecoin - use fixed $1.00 for all historical data
+                is_stablecoin = symbol in ['USDT', 'USDC']
+                
+                if is_stablecoin:
+                    # Stablecoins: generate 30 points of $1.00
+                    past_prices = [1.0] * 30
+                    from datetime import datetime, timedelta
+                    current_time = datetime.now()
+                    # Generate timestamps going back
+                    if model_timeframe == '1H':
+                        timestamps = [(current_time - timedelta(hours=i)).isoformat() for i in range(29, -1, -1)]
+                    elif model_timeframe == '4H':
+                        timestamps = [(current_time - timedelta(hours=i*4)).isoformat() for i in range(29, -1, -1)]
+                    elif model_timeframe == '1D':
+                        timestamps = [(current_time - timedelta(days=i)).isoformat() for i in range(29, -1, -1)]
+                    else:
+                        timestamps = [(current_time - timedelta(hours=i)).isoformat() for i in range(29, -1, -1)]
+                elif database and database.pool:
                     try:
                         from config.symbol_manager import symbol_manager
                         db_key = symbol_manager.get_db_key(symbol, model_timeframe)
