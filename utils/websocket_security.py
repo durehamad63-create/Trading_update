@@ -45,13 +45,18 @@ class WebSocketSecurity:
     
     @staticmethod
     def validate_timeframe(timeframe: str) -> str:
-        """Validate and sanitize timeframe"""
-        valid_timeframes = ['1m', '5m', '15m', '30m', '1h', '4h', '4H', '1d', '1D', '7D', '1w', '1W', '1wk', '1m', '1M', '1mo', '1Y', '5Y']
+        """Validate and normalize timeframe (case-insensitive)"""
+        # Normalize to uppercase for consistency
+        timeframe_upper = timeframe.upper()
         
-        if timeframe not in valid_timeframes:
+        # Map of valid timeframes (all uppercase)
+        valid_timeframes = ['1M', '5M', '15M', '30M', '1H', '4H', '1D', '7D', '1W', '1WK', '1MO', '1Y', '5Y']
+        
+        if timeframe_upper not in valid_timeframes:
             raise ValueError(f"Invalid timeframe: {timeframe}")
         
-        return timeframe
+        # Return normalized uppercase version
+        return timeframe_upper
     
     @staticmethod
     def safe_float(value, default=0.0) -> float:

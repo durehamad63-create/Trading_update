@@ -194,7 +194,9 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 update_count += 1
                 
                 # Map display timeframes to model timeframes
-                model_timeframe = {'7D': '1W', '1Y': '1W', '5Y': '1M'}.get(timeframe, timeframe)
+                # Normalize timeframe to uppercase first
+                timeframe_upper = timeframe.upper()
+                model_timeframe = {'7D': '1W', '1Y': '1W', '5Y': '1M'}.get(timeframe_upper, timeframe_upper)
                 
                 # Get prediction with fallback
                 try:
@@ -248,10 +250,10 @@ def setup_websocket_routes(app: FastAPI, model, database):
                     future_prices = [predicted_price]
                     future_timestamps = []
                 else:
-                    # Use multi-step predictor based on MODEL timeframe
+                    # Use multi-step predictor based on MODEL timeframe (uppercase)
                     timeframe_steps = {
-                        '1h': 12,  # 12 hourly predictions
-                        '4h': 6,   # 6 4-hour predictions
+                        '1H': 12,  # 12 hourly predictions
+                        '4H': 6,   # 6 4-hour predictions
                         '1D': 7,   # 7 daily predictions
                         '1W': 4,   # 4 weekly predictions
                         '1M': 3    # 3 monthly predictions

@@ -8,6 +8,9 @@ def setup_forecast_routes(app: FastAPI, model, database):
     
     @app.get("/api/asset/{symbol}/forecast")
     async def asset_forecast(symbol: str, timeframe: str = "1D"):
+        # Normalize timeframe to uppercase
+        timeframe = timeframe.upper()
+        
         # Check if macro indicator - they don't support timeframes
         macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
         is_macro = symbol in macro_symbols
@@ -59,13 +62,13 @@ def setup_forecast_routes(app: FastAPI, model, database):
             future_prices = [predicted_price]  # Only next expected value
             future_timestamps = [(datetime.now() + timedelta(days=freq_info['days'])).isoformat()]
         else:
-            # Multi-step prediction with caching
+            # Multi-step prediction with caching (uppercase timeframes)
             timeframe_steps = {
-                '1D': 12,  # 12 hourly predictions
-                '1W': 7,   # 7 daily predictions
-                '1M': 4,   # 4 weekly predictions
-                '1h': 12,  # 12 hourly predictions
-                '4h': 6    # 6 4-hour predictions
+                '1H': 12,  # 12 hourly predictions
+                '4H': 6,   # 6 4-hour predictions
+                '1D': 7,   # 7 daily predictions
+                '1W': 4,   # 4 weekly predictions
+                '1M': 3    # 3 monthly predictions
             }
             
             num_steps = timeframe_steps.get(actual_timeframe, 1)

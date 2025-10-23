@@ -35,10 +35,10 @@ class MultiStepPredictor:
             if not historical_prices or len(historical_prices) < 20:
                 return None
             
-            # Time deltas
+            # Time deltas (uppercase timeframes)
             time_deltas = {
-                '1h': timedelta(hours=1),
-                '4h': timedelta(hours=4),
+                '1H': timedelta(hours=1),
+                '4H': timedelta(hours=4),
                 '1D': timedelta(days=1),
                 '1W': timedelta(weeks=1),
                 '1M': timedelta(days=30)
