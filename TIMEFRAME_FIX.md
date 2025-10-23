@@ -25,7 +25,8 @@
 
 ### 3. `multistep_predictor.py`
 - **Changed**: Time deltas dictionary uses uppercase keys (1H, 4H)
-- **Impact**: Multi-step predictions now work correctly for 4H timeframe
+- **Changed**: Added timeframe mapping for crypto (1H→1h, 4H→4h) and stocks (1H→60m, 4H→4h)
+- **Impact**: Multi-step predictions now work correctly for 4H timeframe (returns 6 predictions)
 
 ### 4. `modules/ml_predictor.py`
 - **Changed**: Crypto model timeframe mapping: `1H -> 1h`, `4H -> 4h`
@@ -51,6 +52,7 @@ ML Predictor → Maps to model format:
     - Stock: "1H" → "60m", "4H" → "4h"
     ↓
 Multistep Predictor → Uses "1H" or "4H" for time deltas
+    - Maps to model format: "1H" → "1h"/"60m", "4H" → "4h"
     ↓
 Returns 12 predictions for 1H, 6 predictions for 4H
 ```

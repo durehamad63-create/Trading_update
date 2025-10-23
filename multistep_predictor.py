@@ -92,15 +92,19 @@ class MultiStepPredictor:
                     from config.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS
                     if symbol in CRYPTO_SYMBOLS:
                         models = self.ml_model.crypto_raw_models
+                        # Map uppercase to lowercase for crypto models
+                        model_timeframe = {'1H': '1h', '4H': '4h'}.get(timeframe, timeframe)
                     elif symbol in STOCK_SYMBOLS:
                         models = self.ml_model.stock_raw_models
+                        # Map uppercase to stock model format
+                        model_timeframe = {'1H': '60m', '4H': '4h', '1D': '1d', '1W': '1wk', '1M': '1mo'}.get(timeframe, timeframe)
                     else:
                         return None
                     
-                    if not models or symbol not in models or timeframe not in models[symbol]:
+                    if not models or symbol not in models or model_timeframe not in models[symbol]:
                         return None
                     
-                    model_data = models[symbol][timeframe]
+                    model_data = models[symbol][model_timeframe]
                     
                     # Create feature vector
                     feature_vector = np.zeros(len(model_data['features']))
