@@ -27,7 +27,7 @@ class GapFillingService:
         
         # Only native API intervals - no synthetic aggregation
         self.crypto_timeframes = ['1h', '4h', '1D', '1W', '1M']  # Binance native
-        self.stock_timeframes = ['1h', '1D', '1W', '1M']  # Yahoo native (removed 4H, 7D)
+        self.stock_timeframes = ['1h', '4h', '1D', '1W', '1M']  # Yahoo native + 4h aggregation
         self.macro_timeframes = ['1D']  # FRED native - macro only supports daily (real release dates)
         
         # Maintain exactly 200 records per timeframe
@@ -260,8 +260,12 @@ class GapFillingService:
         """Get stock data from Yahoo Finance with proper intervals"""
         for retry in range(3):
             try:
-                # Get appropriate range and interval - NATIVE ONLY
+                # Get appropriate range and interval
                 if timeframe == '1h':
+                    yahoo_interval = '1h'
+                    yahoo_range = '730d'
+                elif timeframe == '4h':
+                    # Yahoo doesn't have native 4h, use 1h and aggregate
                     yahoo_interval = '1h'
                     yahoo_range = '730d'
                 elif timeframe == '1D':
@@ -309,7 +313,23 @@ class GapFillingService:
                     # Take last 200 records only
                     data = data[-200:] if len(data) > 200 else data
                     
-                    filtered_data = data
+                    # Aggregate to 4h if needed
+                    if timeframe == '4h' and yahoo_interval == '1h':
+                        aggregated_data = []
+                        for i in range(0, len(data), 4):
+                            chunk = data[i:i+4]
+                            if chunk:
+                                aggregated_data.append({
+                                    'timestamp': chunk[0]['timestamp'],
+                                    'open': chunk[0]['open'],
+                                    'high': max(c['high'] for c in chunk),
+                                    'low': min(c['low'] for c in chunk),
+                                    'close': chunk[-1]['close'],
+                                    'volume': sum(c['volume'] for c in chunk)
+                                })
+                        filtered_data = aggregated_data[-200:]
+                    else:
+                        filtered_data = data
                     
                     print(f"    ✅ {symbol} {timeframe}: Got {len(filtered_data)} records from Yahoo")
                     return filtered_data

@@ -262,43 +262,38 @@ def setup_websocket_routes(app: FastAPI, model, database):
                 future_prices = []
                 future_timestamps = []
                 
-                if is_macro:
-                    # Macro: single prediction
-                    future_prices = [predicted_price]
-                    future_timestamps = []
-                else:
-                    # Use multi-step predictor based on MODEL timeframe (uppercase)
-                    timeframe_steps = {
-                        '1H': 12,  # 12 hourly predictions
-                        '4H': 6,   # 6 4-hour predictions
-                        '1D': 7,   # 7 daily predictions
-                        '1W': 4,   # 4 weekly predictions
-                        '1M': 3    # 3 monthly predictions
-                    }
-                    
-                    num_steps = timeframe_steps.get(model_timeframe, 1)
-                    
-                    if num_steps > 1:
-                        try:
-                            from multistep_predictor import multistep_predictor
-                            if multistep_predictor:
-                                multistep_data = await multistep_predictor.get_multistep_forecast(symbol, model_timeframe, num_steps)
-                                if multistep_data:
-                                    future_prices = multistep_data['prices']
-                                    future_timestamps = multistep_data['timestamps']
-                                else:
-                                    future_prices = [predicted_price]
-                                    future_timestamps = []
+                # Use multi-step predictor for all asset types (crypto, stocks, macro)
+                timeframe_steps = {
+                    '1H': 12,  # 12 hourly predictions
+                    '4H': 6,   # 6 4-hour predictions
+                    '1D': 4,   # 4 predictions (quarterly for macro, daily for others)
+                    '1W': 4,   # 4 weekly predictions
+                    '1M': 3    # 3 monthly predictions
+                }
+                
+                num_steps = timeframe_steps.get(model_timeframe, 1)
+                
+                if num_steps > 1:
+                    try:
+                        from multistep_predictor import multistep_predictor
+                        if multistep_predictor:
+                            multistep_data = await multistep_predictor.get_multistep_forecast(symbol, model_timeframe, num_steps)
+                            if multistep_data:
+                                future_prices = multistep_data['prices']
+                                future_timestamps = multistep_data['timestamps']
                             else:
                                 future_prices = [predicted_price]
                                 future_timestamps = []
-                        except Exception as e:
-                            logger.warning(f"Multistep prediction failed for {symbol}: {e}, using single prediction")
+                        else:
                             future_prices = [predicted_price]
                             future_timestamps = []
-                    else:
+                    except Exception as e:
+                        logger.warning(f"Multistep prediction failed for {symbol}: {e}, using single prediction")
                         future_prices = [predicted_price]
                         future_timestamps = []
+                else:
+                    future_prices = [predicted_price]
+                    future_timestamps = []
                 
                 # Combine timestamps
                 if future_timestamps:
