@@ -53,6 +53,10 @@ class MultiStepPredictor:
             # Start with real historical data
             price_history = list(historical_prices[-30:])  # Last 30 points
             
+            # Check if macro indicator
+            macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+            is_macro = symbol in macro_symbols
+            
             # Autoregressive prediction: each step uses previous predictions
             for i in range(num_steps):
                 try:
@@ -60,36 +64,67 @@ class MultiStepPredictor:
                     import pandas as pd
                     df = pd.DataFrame({'close': price_history})
                     
-                    df['sma_5'] = df['close'].rolling(5, min_periods=1).mean()
-                    df['sma_20'] = df['close'].rolling(20, min_periods=1).mean()
-                    df['price_sma5_ratio'] = df['close'] / df['sma_5']
-                    df['price_sma20_ratio'] = df['close'] / df['sma_20']
-                    df['returns'] = df['close'].pct_change()
-                    df['returns_5'] = df['close'].pct_change(5)
-                    
-                    delta_col = df['close'].diff()
-                    gain = (delta_col.where(delta_col > 0, 0)).rolling(14, min_periods=1).mean()
-                    loss = (-delta_col.where(delta_col < 0, 0)).rolling(14, min_periods=1).mean()
-                    rs = gain / loss
-                    df['rsi'] = 100 - (100 / (1 + rs))
-                    
-                    df['momentum_7'] = df['close'] / df['close'].shift(7)
-                    df['volatility'] = df['returns'].rolling(10, min_periods=1).std()
-                    
-                    latest = df.iloc[-1]
-                    
-                    features = {
-                        'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
-                        'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
-                        'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
-                        'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
-                        'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
-                        'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
-                        'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
-                    }
+                    if is_macro:
+                        # Macro features
+                        df['change_1'] = df['close'].pct_change(1)
+                        df['change_4'] = df['close'].pct_change(4)
+                        df['ma_4'] = df['close'].rolling(4, min_periods=1).mean()
+                        df['ma_12'] = df['close'].rolling(12, min_periods=1).mean()
+                        df['trend'] = (df['close'] - df['ma_12']) / df['ma_12']
+                        df['volatility'] = df['change_1'].rolling(12, min_periods=1).std()
+                        df['lag_1'] = df['close'].shift(1)
+                        df['lag_4'] = df['close'].shift(4)
+                        df['change_lag_1'] = df['change_1'].shift(1)
+                        
+                        latest = df.iloc[-1]
+                        current_price = price_history[-1]
+                        
+                        features = {
+                            'lag_1': float(latest['lag_1']) if pd.notna(latest['lag_1']) else current_price,
+                            'lag_4': float(latest['lag_4']) if pd.notna(latest['lag_4']) else current_price,
+                            'ma_4': float(latest['ma_4']) if pd.notna(latest['ma_4']) else current_price,
+                            'ma_12': float(latest['ma_12']) if pd.notna(latest['ma_12']) else current_price,
+                            'change_1': float(latest['change_1']) if pd.notna(latest['change_1']) else 0.0,
+                            'change_4': float(latest['change_4']) if pd.notna(latest['change_4']) else 0.0,
+                            'change_lag_1': float(latest['change_lag_1']) if pd.notna(latest['change_lag_1']) else 0.0,
+                            'trend': float(latest['trend']) if pd.notna(latest['trend']) else 0.0,
+                            'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.01,
+                            'quarter': 1  # Default quarter
+                        }
+                    else:
+                        # Crypto/Stock features
+                        df['sma_5'] = df['close'].rolling(5, min_periods=1).mean()
+                        df['sma_20'] = df['close'].rolling(20, min_periods=1).mean()
+                        df['price_sma5_ratio'] = df['close'] / df['sma_5']
+                        df['price_sma20_ratio'] = df['close'] / df['sma_20']
+                        df['returns'] = df['close'].pct_change()
+                        df['returns_5'] = df['close'].pct_change(5)
+                        
+                        delta_col = df['close'].diff()
+                        gain = (delta_col.where(delta_col > 0, 0)).rolling(14, min_periods=1).mean()
+                        loss = (-delta_col.where(delta_col < 0, 0)).rolling(14, min_periods=1).mean()
+                        rs = gain / loss
+                        df['rsi'] = 100 - (100 / (1 + rs))
+                        
+                        df['momentum_7'] = df['close'] / df['close'].shift(7)
+                        df['volatility'] = df['returns'].rolling(10, min_periods=1).std()
+                        
+                        latest = df.iloc[-1]
+                        
+                        features = {
+                            'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
+                            'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
+                            'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
+                            'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
+                            'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
+                            'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
+                            'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
+                        }
                     
                     # Get model and predict
                     from config.symbols import CRYPTO_SYMBOLS, STOCK_SYMBOLS
+                    macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
+                    
                     if symbol in CRYPTO_SYMBOLS:
                         models = self.ml_model.crypto_raw_models
                         # Map uppercase to lowercase for crypto models
@@ -98,6 +133,9 @@ class MultiStepPredictor:
                         models = self.ml_model.stock_raw_models
                         # Map uppercase to stock model format
                         model_timeframe = {'1H': '60m', '4H': '4h', '1D': '1d', '1W': '1wk', '1M': '1mo'}.get(timeframe, timeframe)
+                    elif symbol in macro_symbols:
+                        models = self.ml_model.macro_models
+                        model_timeframe = '1D'  # Macro only supports 1D
                     else:
                         return None
                     
@@ -115,10 +153,12 @@ class MultiStepPredictor:
                     features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
                     price_change = model_data['price_model'].predict(features_scaled)[0]
                     
-                    # Clip prediction
-                    if symbol in CRYPTO_SYMBOLS:
+                    # Clip prediction based on asset type
+                    if is_macro:
+                        price_change = np.clip(price_change, -0.05, 0.05)
+                    elif symbol in CRYPTO_SYMBOLS:
                         price_change = np.clip(price_change, -0.15, 0.15)
-                    else:
+                    else:  # stocks
                         price_change = np.clip(price_change, -0.1, 0.1)
                     
                     # Calculate next price
