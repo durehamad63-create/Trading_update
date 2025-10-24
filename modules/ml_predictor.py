@@ -398,8 +398,9 @@ class MobileMLModel:
         return 0.0
     
     def _get_real_historical_prices(self, symbol):
-        """Get real historical prices - Binance for crypto, YFinance for stocks"""
+        """Get real historical prices - Binance for crypto, YFinance for stocks, FRED for macro"""
         crypto_symbols = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOGE', 'USDT', 'USDC', 'TRX']
+        macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
         
         try:
             # Stablecoins return fixed price history
@@ -420,8 +421,26 @@ class MobileMLModel:
                     if response.status_code == 200:
                         klines = response.json()
                         prices = [float(k[4]) for k in klines]  # Close prices
-                        # logging.info(f"🔥 REAL BINANCE HISTORY: {symbol} got {len(prices)} price points")
                         return prices
+            elif symbol in macro_symbols:
+                # Use FRED for macro historical data
+                from fredapi import Fred
+                fred_api_key = os.getenv('FRED_API_KEY')
+                if not fred_api_key:
+                    raise Exception("FRED_API_KEY not found")
+                
+                fred = Fred(api_key=fred_api_key)
+                fred_series = {
+                    'GDP': 'GDP', 'CPI': 'CPIAUCSL', 'UNEMPLOYMENT': 'UNRATE',
+                    'FED_RATE': 'FEDFUNDS', 'CONSUMER_CONFIDENCE': 'UMCSENT'
+                }
+                
+                series_id = fred_series.get(symbol)
+                if series_id:
+                    data = fred.get_series(series_id)
+                    if data is not None and len(data) > 0:
+                        prices = [float(x) for x in data.values if pd.notna(x)]
+                        return prices[-30:] if len(prices) > 30 else prices
             else:
                 # Use direct Yahoo Finance API for stock historical data
                 url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1mo"
