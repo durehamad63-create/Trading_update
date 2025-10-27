@@ -11,24 +11,28 @@ class MultiStepPredictor:
         self.ml_model = ml_model
         self.cache_ttl = 300  # 5 minutes for multi-step predictions
     
-    async def get_multistep_forecast(self, symbol, timeframe, num_steps):
-        """Get cached or generate multi-step predictions"""
-        cache_key = f"multistep:{symbol}:{timeframe}:{num_steps}"
+    async def get_multistep_forecast(self, symbol, timeframe, num_steps=5):
+        """Get cached or generate 5-step predictions for all timeframes"""
+        # Always use 5 steps regardless of input
+        num_steps = 5
+        cache_key = f"multistep:{symbol}:{timeframe}:5"
         cached = CacheManager.get_cache(cache_key)
         
         if cached:
             return cached
         
-        # Generate new multi-step predictions
-        result = await self._generate_multistep(symbol, timeframe, num_steps)
+        # Generate new 5-step predictions
+        result = await self._generate_multistep(symbol, timeframe, 5)
         
         if result:
             CacheManager.set_cache(cache_key, result, self.cache_ttl)
         
         return result
     
-    async def _generate_multistep(self, symbol, timeframe, num_steps):
-        """Generate autoregressive multi-step predictions"""
+    async def _generate_multistep(self, symbol, timeframe, num_steps=5):
+        """Generate autoregressive 5-step predictions for all timeframes"""
+        # Always use exactly 5 steps
+        num_steps = 5
         try:
             # Get historical prices for feature calculation
             historical_prices = self.ml_model._get_real_historical_prices(symbol)
@@ -57,8 +61,8 @@ class MultiStepPredictor:
             macro_symbols = ['GDP', 'CPI', 'UNEMPLOYMENT', 'FED_RATE', 'CONSUMER_CONFIDENCE']
             is_macro = symbol in macro_symbols
             
-            # Autoregressive prediction: each step uses previous predictions
-            for i in range(num_steps):
+            # Autoregressive prediction: exactly 5 steps for all timeframes
+            for i in range(5):
                 try:
                     # Calculate features from current history (real + predicted)
                     import pandas as pd
@@ -139,10 +143,18 @@ class MultiStepPredictor:
                     else:
                         return None
                     
-                    if not models or symbol not in models or model_timeframe not in models[symbol]:
+                    # Handle SOL 1M fallback to ETH 1M
+                    if symbol == 'SOL' and model_timeframe == '1M' and (not models or symbol not in models or model_timeframe not in models[symbol]):
+                        if models and 'ETH' in models and '1M' in models['ETH']:
+                            print(f"🔄 Multi-step: Using ETH 1M model as fallback for SOL 1M")
+                            model_data = models['ETH']['1M']
+                        else:
+                            return None
+                    elif not models or symbol not in models or model_timeframe not in models[symbol]:
                         return None
-                    
-                    model_data = models[symbol][model_timeframe]
+                    else:
+                        model_data = models[symbol][model_timeframe]
+
                     
                     # Create feature vector
                     feature_vector = np.zeros(len(model_data['features']))
