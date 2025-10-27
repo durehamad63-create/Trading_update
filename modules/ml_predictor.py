@@ -573,11 +573,19 @@ class MobileMLModel:
             if symbol not in models:
                 raise Exception(f"Symbol {symbol} not found in {asset_type} raw models")
             
-            if timeframe not in models[symbol]:
+            # Handle SOL 1M fallback to ETH 1M
+            if symbol == 'SOL' and timeframe == '1M' and timeframe not in models[symbol]:
+                if 'ETH' in models and '1M' in models['ETH']:
+                    print(f"🔄 Using ETH 1M model as fallback for SOL 1M")
+                    model_data = models['ETH']['1M']
+                else:
+                    available = list(models[symbol].keys())
+                    raise Exception(f"SOL 1M model missing and ETH 1M fallback unavailable. Available: {available}")
+            elif timeframe not in models[symbol]:
                 available = list(models[symbol].keys())
                 raise Exception(f"Timeframe {timeframe} not found for {symbol} in {asset_type} raw models. Available: {available}")
-            
-            model_data = models[symbol][timeframe]
+            else:
+                model_data = models[symbol][timeframe]
             
             # Check required keys based on asset type
             if asset_type == 'macro':

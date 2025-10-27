@@ -481,10 +481,18 @@ class GapFillingService:
             else:
                 return None
             
-            if symbol not in models or timeframe not in models[symbol]:
+            # Handle SOL 1M fallback to ETH 1M
+            if symbol == 'SOL' and timeframe == '1M' and (symbol not in models or timeframe not in models[symbol]):
+                if asset_class == 'crypto' and self.model.crypto_raw_models and 'ETH' in self.model.crypto_raw_models and '1M' in self.model.crypto_raw_models['ETH']:
+                    print(f"    🔄 Using ETH 1M model as fallback for SOL 1M in gap filling")
+                    models = self.model.crypto_raw_models
+                    model_data = models['ETH']['1M']
+                else:
+                    return None
+            elif symbol not in models or timeframe not in models[symbol]:
                 return None
-            
-            model_data = models[symbol][timeframe]
+            else:
+                model_data = models[symbol][timeframe]
             
             # Calculate features based on asset type
             df = pd.DataFrame({'close': hist_prices})
