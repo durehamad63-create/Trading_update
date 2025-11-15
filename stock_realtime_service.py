@@ -105,15 +105,15 @@ class StockRealtimeService:
                 # Cache using centralized manager with standard TTL
                 cache_key = self.cache_keys.price(symbol, 'stock')
                 self.cache_manager.set_cache(cache_key, cache_data, ttl=self.cache_ttl.PRICE_STOCK)
-                # Update candles and broadcast only if connections exist
+                # Always store data for all timeframes
+                asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
+                
+                # Broadcast only if connections exist
                 if symbol in self.active_connections and self.active_connections[symbol]:
                     # Immediate price broadcast
                     asyncio.create_task(self._broadcast_stock_price_update(symbol, price_data))
                     # Update candles and forecasts with priority-based rate limiting
                     asyncio.create_task(self._update_stock_candles_and_forecast(symbol, price_data))
-                else:
-                    # Store data for all timeframes even without active connections
-                    asyncio.create_task(self._store_stock_data_all_timeframes(symbol, price_data))
         except Exception as e:
             logger.error(f"Stock {symbol} error: {e}", exc_info=True)
             ErrorHandler.log_stream_error('stock', symbol, str(e))

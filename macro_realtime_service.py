@@ -89,9 +89,11 @@ class MacroRealtimeService:
                     cache_key = self.cache_keys.price(symbol, 'macro')
                     self.cache_manager.set_cache(cache_key, cache_data, ttl=self.cache_ttl.PRICE_MACRO)
                     
-                    # Store data for all timeframes if connections exist
+                    # Always store data for all timeframes
+                    asyncio.create_task(self._store_macro_data_all_timeframes(symbol, self.price_cache[symbol]))
+                    
+                    # Broadcast only if connections exist
                     if symbol in self.active_connections and self.active_connections[symbol]:
-                        asyncio.create_task(self._store_macro_data_all_timeframes(symbol, self.price_cache[symbol]))
                         asyncio.create_task(self._broadcast_macro_update(symbol, self.price_cache[symbol]))
                 
                 # Update every 5 minutes (FRED data updates infrequently)

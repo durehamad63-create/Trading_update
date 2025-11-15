@@ -30,8 +30,8 @@ class GapFillingService:
         self.stock_timeframes = ['1h', '4h', '1D', '1W', '1M']  # Yahoo native + 4h aggregation
         self.macro_timeframes = ['1D']  # FRED native - macro only supports daily (real release dates)
         
-        # Maintain exactly 200 records per timeframe
-        self.max_records = 200
+        # Maintain exactly 2000 records per timeframe (~3 months hourly data)
+        self.max_records = 2000
         
         # Binance mapping for stablecoins
         self.binance_mapping = {'USDT': 'BTCUSDT', 'USDC': 'BTCUSDT'}
@@ -188,17 +188,17 @@ class GapFillingService:
         pass
     
     async def _maintain_record_limit(self, symbol_tf: str, timeframe: str):
-        """Maintain exactly 1000 records per symbol-timeframe"""
+        """Maintain exactly 2000 records per symbol-timeframe"""
         try:
             async with self.db.pool.acquire() as conn:
-                # Keep only latest 200 records
+                # Keep only latest 2000 records (~3 months hourly data)
                 await conn.execute("""
                     DELETE FROM actual_prices 
                     WHERE symbol = $1 AND id NOT IN (
                         SELECT id FROM actual_prices 
                         WHERE symbol = $1 
                         ORDER BY timestamp DESC 
-                        LIMIT 200
+                        LIMIT 2000
                     )
                 """, symbol_tf)
         except Exception as e:

@@ -9,14 +9,14 @@ load_dotenv()
 
 class CacheTTL:
     """Centralized TTL configuration with priority system"""
-    PRICE_CRYPTO = 60
-    PRICE_STOCK = 60
-    PRICE_MACRO = 600
+    PRICE_CRYPTO = 300      # 5 minutes (was 60)
+    PRICE_STOCK = 300       # 5 minutes (was 60)
+    PRICE_MACRO = 1800      # 30 minutes (was 600)
     
     # Prediction cache TTLs by priority
-    PREDICTION_HOT = 30      # BTC, ETH, NVDA, AAPL - 30s cache
-    PREDICTION_NORMAL = 60   # Other major assets - 60s cache
-    PREDICTION_COLD = 120    # Less active assets - 120s cache
+    PREDICTION_HOT = 120    # BTC, ETH, NVDA, AAPL - 2 minutes (was 30)
+    PREDICTION_NORMAL = 300 # Other major assets - 5 minutes (was 60)
+    PREDICTION_COLD = 600   # Less active assets - 10 minutes (was 120)
     
     CHART_DATA = 900
     WEBSOCKET_HISTORY = 600

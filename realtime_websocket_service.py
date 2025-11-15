@@ -170,15 +170,15 @@ class RealTimeWebSocketService:
             
 
                             
-                            # Update candle data and broadcast only if connections exist
+                            # Always store data for all timeframes
+                            asyncio.create_task(self._store_all_timeframes(symbol, current_price, volume, change_24h))
+                            
+                            # Broadcast only if connections exist
                             if symbol in self.active_connections and self.active_connections[symbol]:
                                 # Immediate price broadcast without waiting for ML
                                 asyncio.create_task(self._broadcast_price_update(symbol, current_price, change_24h, volume))
                                 # Update candles and forecasts with priority-based rate limiting
                                 asyncio.create_task(self._update_candles_and_forecast(symbol, current_price, volume, change_24h))
-                            else:
-                                # Store data for all timeframes even without active connections
-                                asyncio.create_task(self._store_all_timeframes(symbol, current_price, volume, change_24h))
                             
                         except Exception as e:
                             logger.error(f"Binance message error for {symbol}: {e}", exc_info=True)

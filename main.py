@@ -57,9 +57,25 @@ from multistep_predictor import init_multistep_predictor
 init_multistep_predictor(model)
 print("✅ Multi-step predictor initialized")
 
+# Periodic gap filling function
+async def periodic_gap_filling():
+    """Run gap filling every 7 days to keep data fresh"""
+    while True:
+        try:
+            await asyncio.sleep(604800)  # 7 days in seconds
+            print("🔄 Running scheduled gap filling (every 7 days)...")
+            from gap_filling_service import GapFillingService
+            gap_filler = GapFillingService(model)
+            await gap_filler.fill_missing_data(db)
+            print("✅ Scheduled gap filling completed successfully")
+        except Exception as e:
+            print(f"⚠️ Scheduled gap filling failed: {e}")
+            # Continue running, will retry in 7 days
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """INSTANT startup - streams start immediately"""
+    import asyncio
     import asyncio
     
     # Initialize services INSTANTLY without waiting
@@ -114,32 +130,41 @@ async def lifespan(app: FastAPI):
                 await gap_filler.fill_missing_data(db)
                 print("✅ Gap filling completed")
                 
-                # NOW START REAL-TIME SERVICES AFTER GAP FILLING
+                            # NOW START REAL-TIME SERVICES AFTER GAP FILLING
                 print("🚀 Starting real-time services...")
                 background_tasks.extend([
                     asyncio.create_task(realtime_service.start_binance_streams()),
                     asyncio.create_task(stock_service.start_stock_streams()),
-                    asyncio.create_task(macro_service.start_macro_streams())
+                    asyncio.create_task(macro_service.start_macro_streams()),
+                    asyncio.create_task(periodic_gap_filling())
                 ])
                 print("✅ Real-time services started")
+                print("✅ Periodic gap filling scheduled (every 7 days)")
             else:
                 print("⚠️ Skipping gap filling - no database connection")
                 print("ℹ️ Application will run with in-memory data only")
+                # Still add periodic gap filling in case database comes online
+                background_tasks.append(asyncio.create_task(periodic_gap_filling()))
         except Exception as e:
             print(f"⚠️ Database setup failed: {e}")
             print("⚠️ Application will run with in-memory data only")
+            # Still add periodic gap filling in case database comes online
+            background_tasks.append(asyncio.create_task(periodic_gap_filling()))
     
     # Initialize database and gap filling (blocking)
     await setup_database()
     
     app.state.background_tasks = background_tasks
+    print(f"📊 Total background tasks: {len(background_tasks)}")
     
     yield
     
     # Cleanup
+    print("🛑 Shutting down background tasks...")
     for task in background_tasks:
         if not task.done():
             task.cancel()
+    print("✅ All background tasks stopped")
 
 
 app = FastAPI(title="Mobile Trading AI", lifespan=lifespan)
