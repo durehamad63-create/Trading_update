@@ -121,7 +121,7 @@ class RawMacroModelTrainer:
             confidence_features.append(conf_features)
             
             base_conf = max(60, 90 - (pred_error * 300))
-            confidence_scores.append(np.clip(base_conf + np.random.uniform(-1, 1), 65, 95))
+            confidence_scores.append(np.clip(base_conf, 65, 95))
         
         confidence_model = RandomForestRegressor(n_estimators=40, max_depth=6, random_state=45)
         confidence_model.fit(np.array(confidence_features), confidence_scores)
