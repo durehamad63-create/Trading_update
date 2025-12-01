@@ -125,7 +125,12 @@ class GapFillingService:
                             print(f"    ✅ {symbol} {timeframe}: {accuracy:.1f}% accuracy ({hits}/{len(results)} hits)")
                         
                         total_processed += 1
-                        await asyncio.sleep(2.0)  # Longer delay to avoid rate limiting
+                        
+                        # Add longer delay for crypto to avoid Binance rate limits
+                        if asset_class == "crypto":
+                            await asyncio.sleep(5.0)  # 5 second delay for crypto
+                        else:
+                            await asyncio.sleep(2.0)  # 2 second delay for stocks/macro
                         
                     except Exception as e:
                         print(f"    ❌ Error processing {symbol} {timeframe}: {e}")
@@ -221,7 +226,7 @@ class GapFillingService:
                 binance_symbol = symbol_manager.get_binance_symbol(symbol)
                 
                 if retry > 0:
-                    await asyncio.sleep(30)
+                    await asyncio.sleep(60)  # Wait 60 seconds before retry
                 
                 klines = await startup_api.get_binance_historical(binance_symbol, 200, interval)
                 data = []
