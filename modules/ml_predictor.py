@@ -587,11 +587,8 @@ class MobileMLModel:
             else:
                 model_data = models[symbol][timeframe]
             
-            # Check required keys based on asset type
-            if asset_type == 'macro':
-                required_keys = ['price_model', 'lower_model', 'upper_model', 'scaler', 'features']
-            else:
-                required_keys = ['price_model', 'high_model', 'low_model', 'confidence_model', 'scaler', 'features']
+            # Check required keys - all asset types use same structure
+            required_keys = ['price_model', 'high_model', 'low_model', 'confidence_model', 'scaler', 'features']
             
             if not all(key in model_data for key in required_keys):
                 raise Exception(f"Incomplete model data for {symbol}:{timeframe}")
@@ -629,13 +626,8 @@ class MobileMLModel:
             features_scaled = model_data['scaler'].transform(feature_vector.reshape(1, -1))
             
             price_change = model_data['price_model'].predict(features_scaled)[0]
-            
-            if asset_type == 'macro':
-                range_low = model_data['lower_model'].predict(features_scaled)[0]
-                range_high = model_data['upper_model'].predict(features_scaled)[0]
-            else:
-                range_high = model_data['high_model'].predict(features_scaled)[0]
-                range_low = model_data['low_model'].predict(features_scaled)[0]
+            range_high = model_data['high_model'].predict(features_scaled)[0]
+            range_low = model_data['low_model'].predict(features_scaled)[0]
             
             # Clip predictions based on asset type
             if asset_type == 'crypto':
@@ -651,19 +643,14 @@ class MobileMLModel:
                 range_low = np.clip(range_low, -0.08, 0.08)
                 range_high = np.clip(range_high, -0.08, 0.08)
             
-            # Get confidence from model
-            if asset_type == 'macro':
-                # Macro uses range-based confidence
-                range_width = abs(range_high - range_low)
-                confidence = 80 - (range_width * 100)
+            # Get confidence from model for all asset types
+            confidence = model_data['confidence_model'].predict(features_scaled)[0]
+            if asset_type == 'crypto':
+                confidence = np.clip(confidence, 60, 95)
+            elif asset_type == 'stock':
+                confidence = np.clip(confidence, 60, 95)
+            else:  # macro
                 confidence = np.clip(confidence, 60, 90)
-            else:
-                # Crypto/Stock use confidence model
-                confidence = model_data['confidence_model'].predict(features_scaled)[0]
-                if asset_type == 'crypto':
-                    confidence = np.clip(confidence, 60, 95)
-                else:  # stock
-                    confidence = np.clip(confidence, 60, 95)
             
             predicted_price = current_price * (1 + price_change)
             high_price = current_price * (1 + range_high)
