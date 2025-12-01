@@ -397,6 +397,23 @@ class MobileMLModel:
             ErrorHandler.log_prediction_error(symbol, f"Change fetch failed: {e}")
         return 0.0
     
+    def _get_real_historical_volumes(self, symbol):
+        """Get real historical volumes for stocks"""
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1mo"
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            response = requests.get(url, timeout=15, headers=headers)
+            if response.status_code == 200:
+                data = response.json()
+                if 'chart' in data and data['chart']['result']:
+                    result = data['chart']['result'][0]
+                    indicators = result['indicators']['quote'][0]
+                    volumes = [x if x is not None else 0 for x in indicators['volume']]
+                    return volumes[-30:] if len(volumes) > 30 else volumes
+        except:
+            pass
+        return []
+    
     def _get_real_historical_prices(self, symbol):
         """Get real historical prices - Binance for crypto, YFinance for stocks, FRED for macro"""
         crypto_symbols = ['BTC', 'ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOGE', 'USDT', 'USDC', 'TRX']
@@ -711,12 +728,12 @@ class MobileMLModel:
             
             df = pd.DataFrame({'close': historical_prices})
             
-            df['sma_5'] = df['close'].rolling(5).mean()
-            df['sma_20'] = df['close'].rolling(20).mean()
-            df['price_sma5_ratio'] = df['close'] / df['sma_5']
-            df['price_sma20_ratio'] = df['close'] / df['sma_20']
+            df['sma_short'] = df['close'].rolling(5).mean()
+            df['sma_long'] = df['close'].rolling(20).mean()
+            df['price_sma_short_ratio'] = df['close'] / df['sma_short']
+            df['price_sma_long_ratio'] = df['close'] / df['sma_long']
             df['returns'] = df['close'].pct_change()
-            df['returns_5'] = df['close'].pct_change(5)
+            df['returns_multi'] = df['close'].pct_change(5)
             
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).rolling(14).mean()
@@ -724,20 +741,38 @@ class MobileMLModel:
             rs = gain / loss
             df['rsi'] = 100 - (100 / (1 + rs))
             
-            df['momentum_7'] = df['close'] / df['close'].shift(7)
-            df['volatility'] = df['returns'].rolling(10).std()
+            df['momentum'] = df['close'] / df['close'].shift(5)
+            df['volatility'] = df['returns'].rolling(5).std()
+            
+            # Add volume ratio for stocks (not available for crypto from historical prices)
+            if asset_type == 'stock':
+                # Get volume data if available
+                try:
+                    volumes = self._get_real_historical_volumes(symbol)
+                    if volumes and len(volumes) == len(hist_prices):
+                        df['volume'] = volumes
+                        df['volume_sma'] = df['volume'].rolling(5).mean()
+                        df['volume_ratio'] = df['volume'] / df['volume_sma']
+                    else:
+                        df['volume_ratio'] = 1.0
+                except:
+                    df['volume_ratio'] = 1.0
             
             latest = df.iloc[-1]
             
             features = {
-                'price_sma5_ratio': float(latest['price_sma5_ratio']) if pd.notna(latest['price_sma5_ratio']) else 1.0,
-                'price_sma20_ratio': float(latest['price_sma20_ratio']) if pd.notna(latest['price_sma20_ratio']) else 1.0,
+                'price_sma_short_ratio': float(latest['price_sma_short_ratio']) if pd.notna(latest['price_sma_short_ratio']) else 1.0,
+                'price_sma_long_ratio': float(latest['price_sma_long_ratio']) if pd.notna(latest['price_sma_long_ratio']) else 1.0,
                 'returns': float(latest['returns']) if pd.notna(latest['returns']) else 0.0,
-                'returns_5': float(latest['returns_5']) if pd.notna(latest['returns_5']) else 0.0,
+                'returns_multi': float(latest['returns_multi']) if pd.notna(latest['returns_multi']) else 0.0,
                 'rsi': float(latest['rsi']) if pd.notna(latest['rsi']) else 50.0,
-                'momentum_7': float(latest['momentum_7']) if pd.notna(latest['momentum_7']) else 1.0,
+                'momentum': float(latest['momentum']) if pd.notna(latest['momentum']) else 1.0,
                 'volatility': float(latest['volatility']) if pd.notna(latest['volatility']) else 0.02
             }
+            
+            # Add volume_ratio for stocks
+            if asset_type == 'stock':
+                features['volume_ratio'] = float(latest.get('volume_ratio', 1.0)) if pd.notna(latest.get('volume_ratio', 1.0)) else 1.0
             
             return features
             
