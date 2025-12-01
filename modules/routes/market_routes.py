@@ -18,6 +18,7 @@ def setup_market_routes(app: FastAPI, model, database):
         await rate_limiter.check_rate_limit(request)
         
         class_param = request.query_params.get('class', 'crypto')
+        print(f"\n🔍 Market Summary Request: class={class_param}, limit={limit}")
         assets = []
         
         if class_param == "crypto":
@@ -47,14 +48,19 @@ def setup_market_routes(app: FastAPI, model, database):
                     # Get prediction from cache (1D timeframe for market summary)
                     pred_cache_key = cache_keys.prediction(symbol, '1D')
                     prediction = cache_manager.get_cache(pred_cache_key)
+                    print(f"  📊 {symbol}: Cache={'Hit' if prediction else 'Miss'}")
                     
                     if not prediction:
                         try:
+                            print(f"  🔮 {symbol}: Generating prediction...")
                             prediction = await model.predict(symbol, '1D')
-                        except Exception:
+                            print(f"  ✅ {symbol}: {prediction.get('forecast_direction')} @ ${prediction.get('predicted_price')} (conf: {prediction.get('confidence')}%)")
+                        except Exception as e:
+                            print(f"  ❌ {symbol}: Prediction error - {e}")
                             continue
                     
                     if not prediction:
+                        print(f"  ⚠️ {symbol}: No prediction")
                         continue
                     
                     # Use real model range values
