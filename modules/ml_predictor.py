@@ -611,11 +611,16 @@ class MobileMLModel:
             
             # Create feature vector (exact match to test files)
             feature_vector = np.zeros(len(model_data['features']))
+            print(f"\n🔍 Feature Debug for {symbol}:")
+            print(f"  Model expects {len(model_data['features'])} features: {model_data['features']}")
+            print(f"  We calculated {len(features)} features: {list(features.keys())}")
+            
             for i, feature_name in enumerate(model_data['features']):
                 if feature_name in features:
                     value = features[feature_name]
                     feature_vector[i] = float(value) if not pd.isna(value) else 0.0
                 else:
+                    print(f"  ⚠️ Missing feature: {feature_name}")
                     feature_vector[i] = 0.0
             
             # Check for NaN in feature vector
